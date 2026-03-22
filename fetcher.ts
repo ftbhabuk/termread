@@ -12,6 +12,13 @@ export interface Article {
   wordCount: number;
   readingTime: number;
   tags: string[];
+  links: Link[];
+}
+
+export interface Link {
+  text: string;
+  url: string;
+  host: string;
 }
 
 const HEADERS = {
@@ -83,6 +90,41 @@ function extractPublishedTime(doc: Document): string | null {
   return null;
 }
 
+function extractLinks(doc: Document, baseUrl: string): Link[] {
+  const seen = new Set<string>();
+  const links: Link[] = [];
+
+  const anchors = doc.querySelectorAll("a[href]");
+  for (const a of anchors) {
+    const href = a.getAttribute("href");
+    if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:")) continue;
+
+    let resolvedUrl: string;
+    try {
+      resolvedUrl = new URL(href, baseUrl).href;
+    } catch {
+      continue;
+    }
+
+    if (seen.has(resolvedUrl)) continue;
+    seen.add(resolvedUrl);
+
+    const text = (a.textContent || "").trim().replace(/\s+/g, " ");
+    if (!text || text.length > 200) continue;
+
+    let host: string;
+    try {
+      host = new URL(resolvedUrl).hostname;
+    } catch {
+      continue;
+    }
+
+    links.push({ text, url: resolvedUrl, host });
+  }
+
+  return links;
+}
+
 export async function fetchArticle(url: string): Promise<Article> {
   process.stderr.write(`\r  \x1b[36mfetching\x1b[0m  ${url}\n`);
 
@@ -103,6 +145,7 @@ export async function fetchArticle(url: string): Promise<Article> {
   // Extract metadata BEFORE readability mutates the DOM
   const tags = extractTags(doc);
   const publishedTime = extractPublishedTime(doc);
+  const links = extractLinks(doc, url);
 
   const reader = new Readability(doc);
   const parsed = reader.parse();
@@ -132,5 +175,6 @@ export async function fetchArticle(url: string): Promise<Article> {
     wordCount,
     readingTime,
     tags,
+    links,
   };
 }

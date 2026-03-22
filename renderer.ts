@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import TurndownService from "turndown";
-import type { Article } from "./fetcher";
+import type { Article, Link } from "./fetcher";
 
 export interface RenderedArticle {
   lines: string[];   // ANSI-colored lines
@@ -217,6 +217,44 @@ const tdService = new TurndownService({
 });
 tdService.remove(["script", "style", "figure", "picture", "img", "iframe", "nav", "aside", "footer"]);
 
+function renderLinks(links: Link[]): string[] {
+  if (!links.length) return [];
+
+  const lines: string[] = [];
+  lines.push("");
+  lines.push(pad(2) + hr());
+  lines.push("");
+  lines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
+  lines.push("");
+
+  // Group links by host
+  const byHost = new Map<string, Link[]>();
+  for (const link of links) {
+    const arr = byHost.get(link.host) || [];
+    arr.push(link);
+    byHost.set(link.host, arr);
+  }
+
+  let idx = 1;
+  for (const [host, hostLinks] of byHost) {
+    lines.push(pad(2) + C.cyan(host));
+    for (const link of hostLinks) {
+      const num = C.yellow(`[${idx}]`);
+      const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
+      const wrapped = wrap(text, CONTENT_WIDTH - 10);
+      lines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
+      for (let j = 1; j < wrapped.length; j++) {
+        lines.push(pad(8) + wrapped[j]);
+      }
+      lines.push(pad(8) + C.muted.underline(link.url));
+      idx++;
+    }
+    lines.push("");
+  }
+
+  return lines;
+}
+
 export function renderArticle(
   article: Article,
   opts: { noColor?: boolean } = {}
@@ -264,6 +302,12 @@ export function renderArticle(
   const markdown = tdService.turndown(article.content);
   const bodyLines = renderMarkdown(markdown, noColor);
   for (const l of bodyLines) {
+    lines.push(l);
+  }
+
+  // ── Links section
+  const linkLines = renderLinks(article.links);
+  for (const l of linkLines) {
     lines.push(l);
   }
 
