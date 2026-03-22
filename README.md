@@ -8,19 +8,23 @@
 
 ## install
 
-**Run directly with bun (no install needed):**
-```bash
-bun run src/cli.ts https://example.com/article
-```
-
-**Or build a standalone binary:**
-```bash
-bun run build
-# produces ./termread binary — move it to your PATH
-mv termread /usr/local/bin/termread
-```
-
 **Requirements:** [Bun](https://bun.sh) v1.0+
+
+**Set up as a command (recommended):**
+```bash
+git clone https://github.com/ftbhabuk/termread.git
+cd termread
+bun install
+
+# add alias to your shell
+echo 'alias termread="bun run '$(pwd)'/cli.ts"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Or run directly without installing:**
+```bash
+bun run cli.ts https://example.com/article
+```
 
 ---
 

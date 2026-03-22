@@ -16,12 +16,19 @@ export interface Article {
 
 const HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   Accept:
     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.5",
+  "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
-  Connection: "keep-alive",
+  "Cache-Control": "no-cache",
+  "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"macOS"',
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
   "Upgrade-Insecure-Requests": "1",
 };
 
@@ -93,6 +100,10 @@ export async function fetchArticle(url: string): Promise<Article> {
   const dom = new JSDOM(html, { url });
   const doc = dom.window.document;
 
+  // Extract metadata BEFORE readability mutates the DOM
+  const tags = extractTags(doc);
+  const publishedTime = extractPublishedTime(doc);
+
   const reader = new Readability(doc);
   const parsed = reader.parse();
 
@@ -105,12 +116,6 @@ export async function fetchArticle(url: string): Promise<Article> {
     .split(/\s+/)
     .filter(Boolean).length;
   const readingTime = Math.max(1, Math.round(wordCount / 200));
-
-  // Re-parse dom for metadata (readability mutates it)
-  const dom2 = new JSDOM(html, { url });
-  const doc2 = dom2.window.document;
-  const tags = extractTags(doc2);
-  const publishedTime = extractPublishedTime(doc2);
 
   process.stderr.write(
     `\r  \x1b[32mrendering\x1b[0m  ~${readingTime} min read · ${wordCount.toLocaleString()} words\n`

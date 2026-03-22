@@ -2,14 +2,14 @@
   "name": "termread",
   "version": "0.1.0",
   "description": "Read any article, beautifully, in your terminal",
-  "module": "src/cli.ts",
+  "module": "cli.ts",
   "type": "module",
   "bin": {
     "termread": "./termread"
   },
   "scripts": {
-    "start": "bun run src/cli.ts",
-    "build": "bun build src/cli.ts --compile --outfile termread"
+    "start": "bun run cli.ts",
+    "build": "bun build cli.ts --compile --outfile termread"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
