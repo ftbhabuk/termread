@@ -99,8 +99,10 @@ URL
 - [ ] bookmarks (termread --bookmarks)
 - [ ] Ink/React TUI for richer UI
 - [ ] config file (~/.termreadrc) for theme/width
-- [ ] --summarize mode (AI summary via API)
-- [ ] image-to-ascii rendering
+- [ ] image-to-ascii rendering priortitze this or simple ascci is fine too
+- [ ] also make it like we first open termread and then can input wanted urls or we can directly do in single line too like in codex
+- [ ] add ascci or some sort of art  or design after opening termread (style like claude code or opecode design )
+- [ ] do tasks in sandbox / robust vm with no restrict to ip!! 
 
 ---
 
