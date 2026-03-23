@@ -67,8 +67,8 @@ export function writeKittyPlacement(img: KittyImage, row: number, col: number): 
     chunks.push(base64.slice(i, i + 4096));
   }
 
-  // a=t = transmit and display, c=COLS, r=ROWS, C=2 = move cursor to right of image
-  const ctrl = `f=100,a=t,i=1,c=${img.displayWidth},r=${img.displayHeight},C=2`;
+  // a=t = transmit and display, z=1 (on top of text), C=2 = move cursor to right
+  const ctrl = `f=100,a=t,i=1,z=1,c=${img.displayWidth},r=${img.displayHeight},C=2`;
 
   for (let i = 0; i < chunks.length; i++) {
     const m = i < chunks.length - 1 ? 1 : 0;
