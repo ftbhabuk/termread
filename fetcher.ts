@@ -13,12 +13,20 @@ export interface Article {
   readingTime: number;
   tags: string[];
   links: Link[];
+  images: ImageRef[];
 }
 
 export interface Link {
   text: string;
   url: string;
   host: string;
+}
+
+export interface ImageRef {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
 }
 
 const HEADERS = {
@@ -125,6 +133,51 @@ function extractLinks(doc: Document, baseUrl: string): Link[] {
   return links;
 }
 
+function extractImages(doc: Document, baseUrl: string): ImageRef[] {
+  const seen = new Set<string>();
+  const images: ImageRef[] = [];
+
+  // Collect from og:image first (usually the hero)
+  const ogImage = doc.querySelector('meta[property="og:image"]');
+  if (ogImage) {
+    const src = ogImage.getAttribute("content");
+    if (src) {
+      try {
+        const resolved = new URL(src, baseUrl).href;
+        if (!seen.has(resolved)) {
+          seen.add(resolved);
+          images.push({ src: resolved, alt: "hero", width: 0, height: 0 });
+        }
+      } catch {}
+    }
+  }
+
+  // Collect from <img> tags with decent dimensions
+  const imgs = doc.querySelectorAll("img[src]");
+  for (const img of imgs) {
+    const src = img.getAttribute("src");
+    if (!src || src.startsWith("data:") || src.includes("pixel") || src.includes("1x1") || src.includes("tracker")) continue;
+
+    let resolved: string;
+    try { resolved = new URL(src, baseUrl).href; } catch { continue; }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+
+    const alt = img.getAttribute("alt") || "";
+    const w = parseInt(img.getAttribute("width") || "0") || 0;
+    const h = parseInt(img.getAttribute("height") || "0") || 0;
+
+    // Skip tiny images (likely icons/trackers)
+    if (w > 0 && w < 50) continue;
+    if (h > 0 && h < 50) continue;
+
+    images.push({ src: resolved, alt, width: w, height: h });
+  }
+
+  // Limit to reasonable number
+  return images.slice(0, 10);
+}
+
 export async function fetchArticle(url: string): Promise<Article> {
   process.stderr.write(`\r  \x1b[36mfetching\x1b[0m  ${url}\n`);
 
@@ -146,6 +199,7 @@ export async function fetchArticle(url: string): Promise<Article> {
   const tags = extractTags(doc);
   const publishedTime = extractPublishedTime(doc);
   const links = extractLinks(doc, url);
+  const images = extractImages(doc, url);
 
   const reader = new Readability(doc);
   const parsed = reader.parse();
@@ -176,5 +230,6 @@ export async function fetchArticle(url: string): Promise<Article> {
     readingTime,
     tags,
     links,
+    images,
   };
 }

@@ -1,5 +1,7 @@
 import type { RenderedArticle } from "./renderer";
 import type { Article } from "./fetcher";
+import type { KittyImage } from "./imager";
+import { placeImageAt } from "./imager";
 import chalk from "chalk";
 
 const C = {
@@ -93,6 +95,19 @@ function showCursor() { process.stdout.write("\x1b[?25h"); }
 function enterAltScreen() { process.stdout.write("\x1b[?1049h"); }
 function exitAltScreen() { process.stdout.write("\x1b[?1049l"); }
 
+function placeKittyImages(images: KittyImage[]) {
+  if (!images.length) return;
+  const { cols, rows } = getTermSize();
+  const textWidth = Math.floor(cols * 0.62);
+  const imgCol = textWidth + 2;
+  let imgRow = 3; // start below top of screen
+  for (const img of images) {
+    if (imgRow + img.displayHeight > rows - 2) break; // don't overlap status bar
+    placeImageAt(img, imgRow, imgCol);
+    imgRow += img.displayHeight + 1;
+  }
+}
+
 function renderPage(
   lines: string[],
   topLine: number,
@@ -144,7 +159,8 @@ function findNext(lines: string[], term: string, from: number): number {
 
 export async function startPager(
   rendered: RenderedArticle,
-  article: Article
+  article: Article,
+  kittyImages: KittyImage[] = []
 ): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stdout.write(rendered.plain);
@@ -173,6 +189,7 @@ export async function startPager(
   process.on("SIGTERM", cleanup);
 
   renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+  placeKittyImages(kittyImages);
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -207,6 +224,7 @@ export async function startPager(
       }
 
       renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+      placeKittyImages(kittyImages);
       return;
     }
 
@@ -310,6 +328,7 @@ export async function startPager(
     }
 
     renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+    placeKittyImages(kittyImages);
   });
 
   // keep alive
