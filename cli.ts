@@ -2,6 +2,7 @@
 import { fetchArticle } from "./fetcher";
 import { renderArticle } from "./renderer";
 import { startPager } from "./pager";
+import { showSplash } from "./splash";
 
 const args = process.argv.slice(2);
 
@@ -12,14 +13,14 @@ const flags = {
   version: args.includes("--version") || args.includes("-v"),
 };
 
-const url = args.find((a) => !a.startsWith("--"));
+let url = args.find((a) => !a.startsWith("--"));
 
 if (flags.version) {
   console.log("termread v0.1.0");
   process.exit(0);
 }
 
-if (flags.help || !url) {
+if (flags.help) {
   console.log(`
   termread — read any article, beautifully, in your terminal
 
@@ -41,6 +42,13 @@ if (flags.help || !url) {
 
 (async () => {
   try {
+    // No URL provided — show welcome screen + interactive input
+    if (!url) {
+      const input = await showSplash();
+      if (!input) process.exit(0);
+      url = input;
+    }
+
     const article = await fetchArticle(url);
     const rendered = renderArticle(article, { noColor: flags.noColor });
 
