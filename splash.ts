@@ -44,6 +44,7 @@ function buildBanner(): string[] {
   return [
     "",
     titleRow,
+    C.subtle("─".repeat(29)),
     "",
     tagline,
     C.subtle("v0.1.0"),
