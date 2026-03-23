@@ -1,8 +1,11 @@
-# termread 🗞️
+# termread
 
 > Read any article, beautifully, in your terminal.
 
 `termread` fetches any URL, strips out the noise (ads, nav, popups), and renders clean, readable content right in your terminal — like Firefox Reader Mode, but for your shell.
+
+<!-- splash screen screenshot -->
+![splash](./screenshots/splash.png)
 
 ---
 
@@ -45,6 +48,9 @@ termread <url> [options]
 
 ### examples
 
+<!-- usage example screenshot -->
+![usage](./screenshots/usage.png)
+
 ```bash
 # read an article
 termread https://www.wired.com/story/some-article
@@ -75,6 +81,7 @@ termread https://example.com/article --raw | wc -w
 | `G` | go to bottom |
 | `/` | search |
 | `n` | next search result |
+| `e` | expand/collapse links |
 | `o` | open in browser |
 | `q` | quit |
 
@@ -90,19 +97,6 @@ URL
                 └─► custom ANSI renderer
                      └─► interactive pager (vim-style keys)
 ```
-
----
-
-## roadmap
-
-- [ ] --save flag — export as clean markdown
-- [ ] bookmarks (termread --bookmarks)
-- [ ] Ink/React TUI for richer UI
-- [ ] config file (~/.termreadrc) for theme/width
-- [ ] image-to-ascii rendering priortitze this or simple ascci is fine too
-- [ ] also make it like we first open termread and then can input wanted urls or we can directly do in single line too like in codex
-- [ ] add ascci or some sort of art  or design after opening termread (style like claude code or opecode design )
-- [ ] do tasks in sandbox / robust vm with no restrict to ip!! 
 
 ---
 
