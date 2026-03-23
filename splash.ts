@@ -14,16 +14,6 @@ const C = {
 const LETTERS = ["t","e","r","m","r","e","a","d"];
 const GRAD    = ["#cba6f7","#b8a8f0","#a9a4ea","#9aa0e4","#8baade","#89b4fa","#89c8f0","#89dceb"];
 
-function lerpHex(a: string, b: string, t: number): string {
-  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
-  const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
-  const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
-  const r  = Math.round(ar + (br - ar) * t);
-  const g  = Math.round(ag + (bg - ag) * t);
-  const bl = Math.round(ab + (bb - ab) * t);
-  return `#${r.toString(16).padStart(2,"0")}${g.toString(16).padStart(2,"0")}${bl.toString(16).padStart(2,"0")}`;
-}
-
 function stripAnsi(s: string) { return s.replace(/\x1b\[[0-9;]*m/g, ""); }
 
 function center(line: string, cols: number): string {
@@ -42,23 +32,18 @@ function exitAltScreen()  { process.stdout.write("\x1b[?1049l"); }
 
 // ─── Static banner (built once) ──────────────────────────────────────────────
 function buildBanner(): string[] {
-  // Big uppercase letters — wide spaced, purple→cyan gradient, bold
-  const bigRow = LETTERS.map((ch, i) =>
-    chalk.hex(GRAD[i]).bold(`  ${ch.toUpperCase()}  `)
-  ).join("");
-
-  // Echo row below — same chars lowercase, dimmed
-  const litRow = LETTERS.map((ch, i) =>
-    chalk.hex(lerpHex(GRAD[i], "#1e1e2e", 0.6))(`  ${ch}  `)
-  ).join("");
+  // Big uppercase letters — gradient bold, with subtle dot separators
+  const sep = C.subtle(" · ");
+  const titleRow = LETTERS.map((ch, i) =>
+    chalk.hex(GRAD[i]).bold(ch.toUpperCase())
+  ).join(sep);
 
   const dot     = C.purple("·");
   const tagline = C.muted("read the web") + ` ${dot} ` + C.muted("beautifully") + ` ${dot} ` + C.muted("in your terminal");
 
   return [
     "",
-    bigRow,
-    litRow,
+    titleRow,
     "",
     tagline,
     C.subtle("v0.1.0"),
