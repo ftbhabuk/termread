@@ -12,7 +12,6 @@ const C = {
 };
 
 const LETTERS = ["t","e","r","m","r","e","a","d"];
-const GRAD    = ["#cba6f7","#b8a8f0","#a9a4ea","#9aa0e4","#8baade","#89b4fa","#89c8f0","#89dceb"];
 
 function stripAnsi(s: string) { return s.replace(/\x1b\[[0-9;]*m/g, ""); }
 
@@ -32,10 +31,10 @@ function exitAltScreen()  { process.stdout.write("\x1b[?1049l"); }
 
 // ─── Static banner (built once) ──────────────────────────────────────────────
 function buildBanner(): string[] {
-  // Big uppercase letters — gradient bold, with subtle dot separators
-  const sep = C.subtle(" · ");
-  const titleRow = LETTERS.map((ch, i) =>
-    chalk.hex(GRAD[i]).bold(ch.toUpperCase())
+  // Big uppercase letters — white bold
+  const sep = C.text(" · ");
+  const titleRow = LETTERS.map(ch =>
+    chalk.white.bold(ch.toUpperCase())
   ).join(sep);
 
   const dot     = C.purple("·");
@@ -44,10 +43,9 @@ function buildBanner(): string[] {
   return [
     "",
     titleRow,
-    C.subtle("─".repeat(29)),
+    C.text("─".repeat(36)),
     "",
     tagline,
-    C.subtle("v0.1.0"),
     "",
   ];
 }
