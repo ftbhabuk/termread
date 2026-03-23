@@ -55,19 +55,23 @@ export async function prepareImage(
 }
 
 // Write Kitty graphics protocol escape sequence to place image
-// This should be called AFTER text rendering, since clearScreen wipes graphics
 export function writeKittyPlacement(img: KittyImage, row: number, col: number): void {
   const base64 = img.pngBuffer.toString("base64");
+
+  // Delete any previous image with this ID
+  process.stdout.write("\x1b_Ga=d,d=i,i=1\x1b\\");
+
+  // Split into chunks and transmit+display
   const chunks: string[] = [];
   for (let i = 0; i < base64.length; i += 4096) {
     chunks.push(base64.slice(i, i + 4096));
   }
 
-  // Control: f=100 (PNG), a=t (transmit+display), c=COLUMNS, r=ROWS, C=1 (don't move cursor)
-  const ctrl = `f=100,a=t,c=${img.displayWidth},r=${img.displayHeight},C=1`;
+  // a=t = transmit and display, c=COLS, r=ROWS, C=2 = move cursor to right of image
+  const ctrl = `f=100,a=t,i=1,c=${img.displayWidth},r=${img.displayHeight},C=2`;
 
   for (let i = 0; i < chunks.length; i++) {
-    const m = i === chunks.length - 1 ? 0 : 1;
+    const m = i < chunks.length - 1 ? 1 : 0;
     if (i === 0) {
       process.stdout.write(`\x1b_G${ctrl},m=${m};${chunks[i]}\x1b\\`);
     } else {

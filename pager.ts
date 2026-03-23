@@ -100,9 +100,10 @@ function placeKittyImages(images: KittyImage[]) {
   const { cols, rows } = getTermSize();
   const textWidth = Math.floor(cols * 0.62);
   const imgCol = textWidth + 2;
-  let imgRow = 3; // start below top of screen
+  let imgRow = 3;
   for (const img of images) {
-    if (imgRow + img.displayHeight > rows - 2) break; // don't overlap status bar
+    if (imgRow + img.displayHeight > rows - 2) break;
+    process.stderr.write(`\r  \x1b[33mplacing\x1b[0m   image at row=${imgRow} col=${imgCol} size=${img.displayWidth}x${img.displayHeight}\n`);
     placeImageAt(img, imgRow, imgCol);
     imgRow += img.displayHeight + 1;
   }
@@ -120,20 +121,21 @@ function renderPage(
 ) {
   const { rows } = getTermSize();
   const viewHeight = rows - 1;
-  clearScreen();
+  // Use line-by-line clear instead of clearScreen() to preserve kitty images
+  process.stdout.write("\x1b[H");
 
   const visible = lines.slice(topLine, topLine + viewHeight);
   for (let i = 0; i < viewHeight; i++) {
     const l = visible[i] ?? "";
     const absLine = topLine + i;
 
+    process.stdout.write(`\x1b[${i + 1};1H\x1b[2K`);
     if (highlightLine === absLine && searchTerm) {
-      // highlight search match
       const re = new RegExp(escapeRe(searchTerm), "gi");
       const highlighted = l.replace(re, (m) => chalk.bgHex("#f9e2af").hex("#1a1b1e")(m));
-      process.stdout.write(highlighted + "\n");
+      process.stdout.write(highlighted);
     } else {
-      process.stdout.write(l + "\n");
+      process.stdout.write(l);
     }
   }
 
