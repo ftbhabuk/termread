@@ -1,7 +1,5 @@
 import type { RenderedArticle } from "./renderer";
 import type { Article } from "./fetcher";
-import type { KittyImage } from "./imager";
-import { placeImageAt } from "./imager";
 import chalk from "chalk";
 
 const C = {
@@ -95,20 +93,6 @@ function showCursor() { process.stdout.write("\x1b[?25h"); }
 function enterAltScreen() { process.stdout.write("\x1b[?1049h"); }
 function exitAltScreen() { process.stdout.write("\x1b[?1049l"); }
 
-function placeKittyImages(images: KittyImage[]) {
-  if (!images.length) return;
-  const { cols, rows } = getTermSize();
-  const textWidth = Math.floor(cols * 0.62);
-  const imgCol = textWidth + 2;
-  let imgRow = 3;
-  for (const img of images) {
-    if (imgRow + img.displayHeight > rows - 2) break;
-    process.stderr.write(`\r  \x1b[33mplacing\x1b[0m   image at row=${imgRow} col=${imgCol} size=${img.displayWidth}x${img.displayHeight}\n`);
-    placeImageAt(img, imgRow, imgCol);
-    imgRow += img.displayHeight + 1;
-  }
-}
-
 function renderPage(
   lines: string[],
   topLine: number,
@@ -121,21 +105,20 @@ function renderPage(
 ) {
   const { rows } = getTermSize();
   const viewHeight = rows - 1;
-  // Use line-by-line clear instead of clearScreen() to preserve kitty images
-  process.stdout.write("\x1b[H");
+  clearScreen();
 
   const visible = lines.slice(topLine, topLine + viewHeight);
   for (let i = 0; i < viewHeight; i++) {
     const l = visible[i] ?? "";
     const absLine = topLine + i;
 
-    process.stdout.write(`\x1b[${i + 1};1H\x1b[2K`);
     if (highlightLine === absLine && searchTerm) {
+      // highlight search match
       const re = new RegExp(escapeRe(searchTerm), "gi");
       const highlighted = l.replace(re, (m) => chalk.bgHex("#f9e2af").hex("#1a1b1e")(m));
-      process.stdout.write(highlighted);
+      process.stdout.write(highlighted + "\n");
     } else {
-      process.stdout.write(l);
+      process.stdout.write(l + "\n");
     }
   }
 
@@ -161,8 +144,7 @@ function findNext(lines: string[], term: string, from: number): number {
 
 export async function startPager(
   rendered: RenderedArticle,
-  article: Article,
-  kittyImages: KittyImage[] = []
+  article: Article
 ): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stdout.write(rendered.plain);
@@ -191,7 +173,6 @@ export async function startPager(
   process.on("SIGTERM", cleanup);
 
   renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
-  placeKittyImages(kittyImages);
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -226,7 +207,6 @@ export async function startPager(
       }
 
       renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
-      placeKittyImages(kittyImages);
       return;
     }
 
@@ -330,7 +310,6 @@ export async function startPager(
     }
 
     renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
-    placeKittyImages(kittyImages);
   });
 
   // keep alive
