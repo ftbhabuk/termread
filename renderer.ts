@@ -3,9 +3,12 @@ import TurndownService from "turndown";
 import type { Article, Link } from "./fetcher";
 
 export interface RenderedArticle {
-  lines: string[];   // ANSI-colored lines
+  lines: string[];   // ANSI-colored lines (collapsed links by default)
   plain: string;     // plain text version for --raw
   pageBreaks: number[]; // line indices where pages start
+  linksStart: number;   // line index where links section starts (-1 if no links)
+  linksFull: string[];  // full link lines
+  linksCollapsed: string[]; // collapsed link lines (first 5 + hint)
 }
 
 const TERM_WIDTH = Math.min(process.stdout.columns || 80, 88);
@@ -217,15 +220,15 @@ const tdService = new TurndownService({
 });
 tdService.remove(["script", "style", "figure", "picture", "img", "iframe", "nav", "aside", "footer"]);
 
-function renderLinks(links: Link[]): string[] {
-  if (!links.length) return [];
+function renderLinks(links: Link[]): { full: string[]; collapsed: string[] } {
+  if (!links.length) return { full: [], collapsed: [] };
 
-  const lines: string[] = [];
-  lines.push("");
-  lines.push(pad(2) + hr());
-  lines.push("");
-  lines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
-  lines.push("");
+  const fullLines: string[] = [];
+  fullLines.push("");
+  fullLines.push(pad(2) + hr());
+  fullLines.push("");
+  fullLines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
+  fullLines.push("");
 
   // Group links by host
   const byHost = new Map<string, Link[]>();
@@ -237,22 +240,57 @@ function renderLinks(links: Link[]): string[] {
 
   let idx = 1;
   for (const [host, hostLinks] of byHost) {
-    lines.push(pad(2) + C.cyan(host));
+    fullLines.push(pad(2) + C.cyan(host));
     for (const link of hostLinks) {
       const num = C.yellow(`[${idx}]`);
       const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
       const wrapped = wrap(text, CONTENT_WIDTH - 10);
-      lines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
+      fullLines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
       for (let j = 1; j < wrapped.length; j++) {
-        lines.push(pad(8) + wrapped[j]);
+        fullLines.push(pad(8) + wrapped[j]);
       }
-      lines.push(pad(8) + C.muted.underline(link.url));
+      fullLines.push(pad(8) + C.muted.underline(link.url));
       idx++;
     }
-    lines.push("");
+    fullLines.push("");
   }
 
-  return lines;
+  // Build collapsed version — show first 5 links, then a hint
+  if (links.length <= 5) return { full: fullLines, collapsed: fullLines };
+
+  const collapsedLines: string[] = [];
+  collapsedLines.push("");
+  collapsedLines.push(pad(2) + hr());
+  collapsedLines.push("");
+  collapsedLines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
+  collapsedLines.push("");
+
+  idx = 1;
+  let shown = 0;
+  for (const [host, hostLinks] of byHost) {
+    if (shown >= 5) break;
+    collapsedLines.push(pad(2) + C.cyan(host));
+    for (const link of hostLinks) {
+      if (shown >= 5) break;
+      const num = C.yellow(`[${idx}]`);
+      const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
+      const wrapped = wrap(text, CONTENT_WIDTH - 10);
+      collapsedLines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
+      for (let j = 1; j < wrapped.length; j++) {
+        collapsedLines.push(pad(8) + wrapped[j]);
+      }
+      collapsedLines.push(pad(8) + C.muted.underline(link.url));
+      idx++;
+      shown++;
+    }
+    collapsedLines.push("");
+  }
+
+  const remaining = links.length - shown;
+  collapsedLines.push(pad(2) + C.subtle(`  ${remaining} more  ·  press `) + C.yellow("e") + C.subtle(" to expand"));
+  collapsedLines.push("");
+
+  return { full: fullLines, collapsed: collapsedLines };
 }
 
 export function renderArticle(
@@ -306,8 +344,9 @@ export function renderArticle(
   }
 
   // ── Links section
-  const linkLines = renderLinks(article.links);
-  for (const l of linkLines) {
+  const linksStart = lines.length;
+  const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links);
+  for (const l of linksCollapsed) {
     lines.push(l);
   }
 
@@ -328,5 +367,5 @@ export function renderArticle(
   // ── Plain text version
   const plain = lines.map(stripAnsi).join("\n");
 
-  return { lines, plain, pageBreaks };
+  return { lines, plain, pageBreaks, linksStart, linksFull, linksCollapsed };
 }

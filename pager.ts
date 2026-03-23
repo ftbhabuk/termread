@@ -27,7 +27,9 @@ function renderStatusBar(
   topLine: number,
   totalLines: number,
   searching: boolean,
-  searchTerm: string
+  searchTerm: string,
+  hasLinks: boolean,
+  linksExpanded: boolean
 ) {
   const { cols } = getTermSize();
   const pct = Math.round((topLine / Math.max(1, totalLines - 1)) * 100);
@@ -49,6 +51,7 @@ function renderStatusBar(
     : C.muted(" j/k") + C.subtle(":scroll ") +
       C.muted("d/u") + C.subtle(":page ") +
       C.muted("/") + C.subtle(":search ") +
+      (hasLinks ? C.muted("e") + C.subtle(":links ") : "") +
       C.muted("o") + C.subtle(":open ") +
       C.muted("q") + C.subtle(":quit");
 
@@ -96,7 +99,9 @@ function renderPage(
   article: Article,
   searching: boolean,
   searchTerm: string,
-  highlightLine: number
+  highlightLine: number,
+  hasLinks: boolean,
+  linksExpanded: boolean
 ) {
   const { rows } = getTermSize();
   const viewHeight = rows - 1;
@@ -117,7 +122,7 @@ function renderPage(
     }
   }
 
-  renderStatusBar(article, topLine, lines.length, searching, searchTerm);
+  renderStatusBar(article, topLine, lines.length, searching, searchTerm, hasLinks, linksExpanded);
 }
 
 function escapeRe(s: string) {
@@ -146,11 +151,14 @@ export async function startPager(
     return;
   }
 
-  const { lines } = rendered;
+  const { lines: initialLines } = rendered;
+  let lines = [...initialLines];
   let topLine = 0;
   let searching = false;
   let searchTerm = "";
   let highlightLine = -1;
+  let linksExpanded = false;
+  const hasLinks = rendered.linksStart >= 0 && rendered.linksFull.length > 0;
 
   enterAltScreen();
   hideCursor();
@@ -164,7 +172,7 @@ export async function startPager(
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  renderPage(lines, topLine, article, searching, searchTerm, highlightLine);
+  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -197,7 +205,8 @@ export async function startPager(
       } else if (key.charCodeAt(0) >= 32) {
         searchTerm += key;
       }
-      renderPage(lines, topLine, article, searching, searchTerm, highlightLine);
+
+      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
       return;
     }
 
@@ -283,9 +292,24 @@ export async function startPager(
       // resize
       case "\x1b[8~":
         break;
+
+      // expand/collapse links
+      case "e":
+        if (rendered.linksStart >= 0 && rendered.linksFull.length > 0) {
+          linksExpanded = !linksExpanded;
+          const newLinkLines = linksExpanded ? rendered.linksFull : rendered.linksCollapsed;
+          const oldLinkLines = linksExpanded ? rendered.linksCollapsed : rendered.linksFull;
+          const afterLinks = rendered.linksStart + oldLinkLines.length;
+          lines = [
+            ...lines.slice(0, rendered.linksStart),
+            ...newLinkLines,
+            ...lines.slice(afterLinks),
+          ];
+        }
+        break;
     }
 
-    renderPage(lines, topLine, article, searching, searchTerm, highlightLine);
+    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
   });
 
   // keep alive
