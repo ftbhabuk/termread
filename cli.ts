@@ -7,13 +7,13 @@ import { showSplash } from "./splash";
 const args = process.argv.slice(2);
 
 const flags = {
-  raw: args.includes("--raw"),
+  raw:     args.includes("--raw"),
   noColor: args.includes("--no-color"),
-  help: args.includes("--help") || args.includes("-h"),
+  help:    args.includes("--help") || args.includes("-h"),
   version: args.includes("--version") || args.includes("-v"),
 };
 
-let url = args.find((a) => !a.startsWith("--"));
+const urlArg = args.find((a) => !a.startsWith("--"));
 
 if (flags.version) {
   console.log("termread v0.1.0");
@@ -25,7 +25,8 @@ if (flags.help) {
   termread — read any article, beautifully, in your terminal
 
   usage:
-    termread <url> [options]
+    termread [url] [options]
+    termread            → launches interactive splash screen
 
   options:
     --raw         plain text output, pipe-friendly
@@ -41,14 +42,16 @@ if (flags.help) {
 }
 
 (async () => {
-  try {
-    // No URL provided — show welcome screen + interactive input
-    if (!url) {
-      const input = await showSplash();
-      if (!input) process.exit(0);
-      url = input;
-    }
+  let url = urlArg;
 
+  // No URL given → show interactive splash
+  if (!url) {
+    const input = await showSplash();
+    if (!input) process.exit(0);
+    url = input;
+  }
+
+  try {
     const article = await fetchArticle(url);
     const rendered = renderArticle(article, { noColor: flags.noColor });
 
