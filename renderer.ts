@@ -48,7 +48,10 @@ function wrap(text: string, width: number): string[] {
 }
 
 function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, "");
+  return str
+    .replace(/\x1b\]8;;[^\x07]*\x07/g, "")   // OSC 8 hyperlink start
+    .replace(/\x1b\]8;;\x07/g, "")            // OSC 8 hyperlink end
+    .replace(/\x1b\[[0-9;]*m/g, "");          // SGR color codes
 }
 
 function pad(n: number): string {
@@ -97,6 +100,33 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
 
     // headings
+    if (raw.startsWith("###### ")) {
+      lines.push("");
+      const text = raw.slice(7);
+      for (const l of wrap(text, CONTENT_WIDTH)) {
+        lines.push(pad(2) + C.yellow.bold(l));
+      }
+      lines.push("");
+      continue;
+    }
+    if (raw.startsWith("##### ")) {
+      lines.push("");
+      const text = raw.slice(6);
+      for (const l of wrap(text, CONTENT_WIDTH)) {
+        lines.push(pad(2) + C.cyan.bold(l));
+      }
+      lines.push("");
+      continue;
+    }
+    if (raw.startsWith("#### ")) {
+      lines.push("");
+      const text = raw.slice(5);
+      for (const l of wrap(text, CONTENT_WIDTH)) {
+        lines.push(pad(2) + C.green.bold(l));
+      }
+      lines.push("");
+      continue;
+    }
     if (raw.startsWith("### ")) {
       lines.push("");
       const text = raw.slice(4);
@@ -191,26 +221,35 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 function styleInline(text: string, noColor: boolean): string {
   if (noColor) return text.replace(/[*_`[\]()]/g, "");
 
-  return text
-    // bold+italic
+  // Phase 1: extract markdown links, replace with numbered placeholders
+  interface LinkInfo { url: string; label: string; host: string }
+  const linkInfos: LinkInfo[] = [];
+  const withPlaceholders = text.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    (_match: string, label: string, url: string) => {
+      let host = url;
+      try { host = new URL(url).hostname; } catch { /* keep raw */ }
+      linkInfos.push({ url, label, host });
+      return "@@" + (linkInfos.length - 1) + "@@";
+    }
+  );
+
+  // Phase 2: apply all inline styles + bare URL wrapping
+  const styled = withPlaceholders
     .replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => C.white.bold.italic(t))
-    // bold
     .replace(/\*\*(.+?)\*\*/g, (_, t) => C.white.bold(t))
-    // italic
     .replace(/\*(.+?)\*/g, (_, t) => C.white.italic(t))
-    // inline code
     .replace(/`([^`]+)`/g, (_, t) => C.green("`") + C.green(t) + C.green("`"))
-    // links — show text, dim url hint
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
-      const host = (() => {
-        try { return new URL(url).hostname; } catch { return url; }
-      })();
-      return C.cyan.underline(label) + C.muted(` (${host})`);
-    })
-    // bare URLs
-    .replace(/https?:\/\/\S+/g, (u) => C.cyan.underline(u))
-    // remaining markdown symbols
+    .replace(/https?:\/\/\S+/g, (u) => "\x1b]8;;" + u + "\x07" + C.cyan.underline(u) + "\x1b]8;;\x07")
     .replace(/[*_]/g, "");
+
+  // Phase 3: replace placeholders with styled OSC 8 links
+  return styled.replace(/@@(\d+)@@/g, (_match: string, idxStr: string) => {
+    const info = linkInfos[parseInt(idxStr)];
+    if (!info) return "";
+    return "\x1b]8;;" + info.url + "\x07" + C.cyan.underline(info.label) +
+      "\x1b]8;;\x07" + C.muted(" (" + info.host + ")");
+  });
 }
 
 const tdService = new TurndownService({
@@ -337,7 +376,8 @@ export function renderArticle(
   lines.push("");
 
   // ── Body
-  const markdown = tdService.turndown(article.content);
+  const cleanContent = article.content.replace(/<img\b[^>]*>/gi, "");
+  const markdown = tdService.turndown(cleanContent);
   const bodyLines = renderMarkdown(markdown, noColor);
   for (const l of bodyLines) {
     lines.push(l);
@@ -354,7 +394,7 @@ export function renderArticle(
   lines.push("");
   lines.push(pad(2) + hr());
   lines.push("");
-  lines.push(pad(2) + C.muted("source: ") + C.cyan.underline(article.url));
+  lines.push(pad(2) + C.muted("source: ") + "\x1b]8;;" + article.url + "\x07" + C.cyan.underline(article.url) + "\x1b]8;;\x07");
   lines.push("");
 
   // ── Page breaks (every ~terminal-height lines)
