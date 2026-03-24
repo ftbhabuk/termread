@@ -236,6 +236,8 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       for (let j = 1; j < wrapped.length; j++) {
         lines.push(pad(6) + wrapped[j]);
       }
+      const underlineLen = Math.min(CONTENT_WIDTH, stripAnsi(wrapped[0] || text).length + 3);
+      lines.push(pad(2) + C.subtle("─".repeat(underlineLen)));
       lines.push("");
       continue;
     }
@@ -259,15 +261,22 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       }
       i--;
       lines.push("");
+      const innerWidth = CONTENT_WIDTH - 4;
       for (const ql of quoteLines) {
         if (!ql.trim()) {
-          lines.push(pad(2) + C.subtle("│ "));
+          lines.push(pad(2) + C.subtle("│") + pad(innerWidth + 2) + C.subtle("│"));
           continue;
         }
         const styled = styleInline(smartenInline(ql), noColor);
-        const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+        const wrapped = wrap(styled, innerWidth);
         for (const wl of wrapped) {
-          lines.push(pad(2) + C.subtle("│ ") + C.muted.italic(wl));
+          const padded = wl.padEnd(innerWidth, " ");
+          lines.push(
+            pad(2) +
+            C.subtle("│ ") +
+            C.muted.italic(padded) +
+            C.subtle(" │")
+          );
         }
       }
       lines.push("");
@@ -503,10 +512,10 @@ export function renderArticle(
     const tagStr = article.tags
       .map((t) => {
         if (noColor) return `[${t}]`;
-        const pill = chalk.bgHex("#313244").hex("#89b4fa")(" " + t + " ");
+        const pill = chalk.bgHex("#313244").hex("#89b4fa")("  " + t + "  ");
         return pill;
       })
-      .join(" ");
+      .join("  ");
     lines.push(pad(2) + tagStr);
   }
 
