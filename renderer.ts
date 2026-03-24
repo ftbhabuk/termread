@@ -262,9 +262,11 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       i--;
       lines.push("");
       const innerWidth = CONTENT_WIDTH - 4;
+      const frameLeft = noColor ? "│ " : C.green("│ ");
+      const frameRight = noColor ? " │" : C.green(" │");
       for (const ql of quoteLines) {
         if (!ql.trim()) {
-          lines.push(pad(2) + C.subtle("│") + pad(innerWidth + 2) + C.subtle("│"));
+          lines.push(pad(2) + frameLeft + pad(innerWidth) + frameRight);
           continue;
         }
         const styled = styleInline(smartenInline(ql), noColor);
@@ -273,9 +275,9 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
           const padded = wl.padEnd(innerWidth, " ");
           lines.push(
             pad(2) +
-            C.subtle("│ ") +
+            frameLeft +
             C.muted.italic(padded) +
-            C.subtle(" │")
+            frameRight
           );
         }
       }
