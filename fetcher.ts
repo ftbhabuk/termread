@@ -13,6 +13,7 @@ export interface Article {
   readingTime: number;
   tags: string[];
   links: Link[];
+  themeColor: string | null;
 }
 
 export interface Link {
@@ -90,6 +91,14 @@ function extractPublishedTime(doc: Document): string | null {
   return null;
 }
 
+function extractThemeColor(html: string): string | null {
+  const m = html.match(/<meta[^>]*name=["']theme-color["'][^>]*content=["']([^"']*)["']/i);
+  if (!m) return null;
+  const c = m[1].trim().toLowerCase();
+  if (!c || c === "#ffffff" || c === "#fff" || c === "#000000" || c === "#000") return null;
+  return c;
+}
+
 function extractLinks(doc: Document, baseUrl: string): Link[] {
   const seen = new Set<string>();
   const links: Link[] = [];
@@ -139,7 +148,15 @@ export async function fetchArticle(url: string): Promise<Article> {
     `\r  \x1b[36mextracting\x1b[0m  article content via readability...\n`
   );
 
-  const dom = new JSDOM(html, { url });
+  // Extract theme-color before stripping CSS
+  const themeColor = extractThemeColor(html);
+
+  // Strip <style> and <link rel="stylesheet> to silence jsdom CSS parse errors
+  const cleanHtml = html
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<link\b[^>]*rel=["']stylesheet["'][^>]*>/gi, "");
+
+  const dom = new JSDOM(cleanHtml, { url });
   const doc = dom.window.document;
 
   // Extract metadata BEFORE readability mutates the DOM
@@ -176,5 +193,6 @@ export async function fetchArticle(url: string): Promise<Article> {
     readingTime,
     tags,
     links,
+    themeColor,
   };
 }

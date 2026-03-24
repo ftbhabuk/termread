@@ -28,6 +28,18 @@ const C = {
   white:   chalk.hex("#d9e0ee"),
 };
 
+const SITE_ACCENT = [C.purple, C.blue, C.cyan, C.green, C.yellow, C.red, C.white];
+
+function siteAccentColor(url: string, themeColor: string | null) {
+  if (themeColor) return chalk.hex(themeColor);
+  let hash = 0;
+  const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+  for (let i = 0; i < host.length; i++) {
+    hash = ((hash << 5) - hash + host.charCodeAt(i)) | 0;
+  }
+  return SITE_ACCENT[Math.abs(hash) % SITE_ACCENT.length];
+}
+
 function wrap(text: string, width: number): string[] {
   if (!text.trim()) return [""];
   const words = text.split(" ");
@@ -344,7 +356,8 @@ export function renderArticle(
 
   // ── Site name
   if (article.siteName) {
-    lines.push(pad(2) + C.muted(article.siteName.toUpperCase()));
+    const accent = siteAccentColor(article.url, article.themeColor);
+    lines.push(pad(2) + accent(article.siteName.toUpperCase()));
     lines.push("");
   }
 
