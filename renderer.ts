@@ -26,6 +26,7 @@ const C = {
   muted:   chalk.hex("#6c7086"),
   subtle:  chalk.hex("#45475a"),
   white:   chalk.hex("#d9e0ee"),
+  code:    chalk.bgHex("#313244").hex("#a6e3a1"),
 };
 
 const SITE_ACCENT = [C.purple, C.blue, C.cyan, C.green, C.yellow, C.red, C.white];
@@ -40,23 +41,40 @@ function siteAccentColor(url: string, themeColor: string | null) {
   return SITE_ACCENT[Math.abs(hash) % SITE_ACCENT.length];
 }
 
+function osc8(url: string, text: string): string {
+  return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07";
+}
+
 function wrap(text: string, width: number): string[] {
   if (!text.trim()) return [""];
   const words = text.split(" ");
   const lines: string[] = [];
   let cur = "";
   for (const word of words) {
-    const visibleLen = stripAnsi(cur).length;
-    const wordLen = stripAnsi(word).length;
-    if (visibleLen + wordLen + (cur ? 1 : 0) > width) {
-      if (cur) lines.push(cur);
-      cur = word;
-    } else {
-      cur = cur ? `${cur} ${word}` : word;
+    const chunks = splitLongWord(word, width);
+    for (const chunk of chunks) {
+      const visibleLen = stripAnsi(cur).length;
+      const wordLen = stripAnsi(chunk).length;
+      if (visibleLen + wordLen + (cur ? 1 : 0) > width) {
+        if (cur) lines.push(cur);
+        cur = chunk;
+      } else {
+        cur = cur ? `${cur} ${chunk}` : chunk;
+      }
     }
   }
   if (cur) lines.push(cur);
   return lines.length ? lines : [""];
+}
+
+function splitLongWord(word: string, width: number): string[] {
+  if (stripAnsi(word).length <= width) return [word];
+  if (/\x1b\[[0-9;]*m/.test(word) || /\x1b\]8;;/.test(word)) return [word];
+  const chunks: string[] = [];
+  for (let i = 0; i < word.length; i += width) {
+    chunks.push(word.slice(i, i + width));
+  }
+  return chunks.length ? chunks : [word];
 }
 
 function stripAnsi(str: string): string {
@@ -72,6 +90,15 @@ function pad(n: number): string {
 
 function hr(): string {
   return C.subtle("─".repeat(CONTENT_WIDTH));
+}
+
+function wrapCode(text: string, width: number): string[] {
+  if (text === "") return [""];
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i += width) {
+    out.push(text.slice(i, i + width));
+  }
+  return out.length ? out : [""];
 }
 
 function renderMarkdown(md: string, noColor: boolean): string[] {
@@ -95,7 +122,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
         lines.push("");
         lines.push(pad(2) + C.subtle("┌─ ") + C.muted(lang || "code") + C.subtle(" " + "─".repeat(Math.max(0, CONTENT_WIDTH - 4 - (lang || "code").length))));
         for (const cl of codeBuffer) {
-          const wrapped = wrap(cl, CONTENT_WIDTH - 4);
+          const wrapped = wrapCode(cl, CONTENT_WIDTH - 4);
           for (const wl of wrapped) {
             lines.push(pad(2) + C.subtle("│ ") + C.green(wl));
           }
@@ -168,12 +195,27 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       continue;
     }
 
-    // blockquotes
-    if (raw.startsWith("> ")) {
-      const text = raw.slice(2);
-      for (const l of wrap(text, CONTENT_WIDTH - 4)) {
-        lines.push(pad(2) + C.purple("┃ ") + C.muted(l));
+    // blockquotes (group contiguous lines)
+    if (/^\s*>/.test(raw)) {
+      const quoteLines: string[] = [];
+      while (i < rawLines.length && /^\s*>/.test(rawLines[i])) {
+        quoteLines.push(rawLines[i].replace(/^\s*>\s?/, ""));
+        i++;
       }
+      i--;
+      lines.push("");
+      for (const ql of quoteLines) {
+        if (!ql.trim()) {
+          lines.push(pad(2) + C.subtle("│ "));
+          continue;
+        }
+        const styled = styleInline(ql, noColor);
+        const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+        for (const wl of wrapped) {
+          lines.push(pad(2) + C.subtle("│ ") + C.muted(wl));
+        }
+      }
+      lines.push("");
       continue;
     }
 
@@ -190,9 +232,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
       const text = raw.replace(/^\s*[-*+] /, "");
       const styled = styleInline(text, noColor);
-      const extra = pad(2 + indent + 2);
-      const firstPrefix = pad(2 + indent) + C.yellow("• ");
-      const wrapped = wrap(styled, CONTENT_WIDTH - indent - 4);
+      const firstPrefix = pad(2 + indent) + C.yellow("•") + " ";
+      const bulletWidth = 2; // bullet + space
+      const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth);
+      const extra = pad(2 + indent + bulletWidth);
       lines.push(firstPrefix + (wrapped[0] || ""));
       for (let j = 1; j < wrapped.length; j++) {
         lines.push(extra + wrapped[j]);
@@ -201,14 +244,17 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
 
     // ordered list
-    if (/^\d+\. /.test(raw)) {
-      const num = raw.match(/^(\d+)\./)?.[1] ?? "1";
-      const text = raw.replace(/^\d+\. /, "");
+    if (/^\s*\d+\. /.test(raw)) {
+      const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
+      const num = raw.match(/^\s*(\d+)\./)?.[1] ?? "1";
+      const text = raw.replace(/^\s*\d+\. /, "");
       const styled = styleInline(text, noColor);
-      const wrapped = wrap(styled, CONTENT_WIDTH - 6);
-      lines.push(pad(2) + C.yellow(`${num}.`) + " " + (wrapped[0] || ""));
+      const bullet = `${num}.`;
+      const bulletWidth = stripAnsi(bullet).length;
+      const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth - 1);
+      lines.push(pad(2 + indent) + C.yellow(bullet) + " " + (wrapped[0] || ""));
       for (let j = 1; j < wrapped.length; j++) {
-        lines.push(pad(6) + wrapped[j]);
+        lines.push(pad(2 + indent + bulletWidth + 1) + wrapped[j]);
       }
       continue;
     }
@@ -231,7 +277,16 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 }
 
 function styleInline(text: string, noColor: boolean): string {
-  if (noColor) return text.replace(/[*_`[\]()]/g, "");
+  if (noColor) {
+    return text
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/~~(.+?)~~/g, "$1")
+      .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/\*(.+?)\*/g, "$1")
+      .replace(/[*_]/g, "");
+  }
 
   // Phase 1: extract markdown links, replace with numbered placeholders
   interface LinkInfo { url: string; label: string; host: string }
@@ -248,19 +303,19 @@ function styleInline(text: string, noColor: boolean): string {
 
   // Phase 2: apply all inline styles + bare URL wrapping
   const styled = withPlaceholders
+    .replace(/~~(.+?)~~/g, (_, t) => C.muted.strikethrough(t))
     .replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => C.white.bold.italic(t))
     .replace(/\*\*(.+?)\*\*/g, (_, t) => C.white.bold(t))
     .replace(/\*(.+?)\*/g, (_, t) => C.white.italic(t))
-    .replace(/`([^`]+)`/g, (_, t) => C.green("`") + C.green(t) + C.green("`"))
-    .replace(/https?:\/\/\S+/g, (u) => "\x1b]8;;" + u + "\x07" + C.cyan.underline(u) + "\x1b]8;;\x07")
+    .replace(/`([^`]+)`/g, (_, t) => C.subtle("`") + C.code(t) + C.subtle("`"))
+    .replace(/https?:\/\/\S+/g, (u) => osc8(u, C.cyan.underline(u)))
     .replace(/[*_]/g, "");
 
   // Phase 3: replace placeholders with styled OSC 8 links
   return styled.replace(/@@(\d+)@@/g, (_match: string, idxStr: string) => {
     const info = linkInfos[parseInt(idxStr)];
     if (!info) return "";
-    return "\x1b]8;;" + info.url + "\x07" + C.cyan.underline(info.label) +
-      "\x1b]8;;\x07" + C.muted(" (" + info.host + ")");
+    return osc8(info.url, C.cyan.underline(info.label)) + C.muted(" (" + info.host + ")");
   });
 }
 
@@ -271,14 +326,16 @@ const tdService = new TurndownService({
 });
 tdService.remove(["script", "style", "figure", "picture", "img", "iframe", "nav", "aside", "footer"]);
 
-function renderLinks(links: Link[]): { full: string[]; collapsed: string[] } {
+function renderLinks(links: Link[], noColor: boolean): { full: string[]; collapsed: string[] } {
   if (!links.length) return { full: [], collapsed: [] };
 
   const fullLines: string[] = [];
   fullLines.push("");
   fullLines.push(pad(2) + hr());
   fullLines.push("");
-  fullLines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
+  const linksTitle = noColor ? "Links" : C.yellow.bold("Links");
+  const linksCount = noColor ? ` (${links.length})` : C.muted(` (${links.length})`);
+  fullLines.push(pad(2) + linksTitle + linksCount);
   fullLines.push("");
 
   // Group links by host
@@ -291,16 +348,17 @@ function renderLinks(links: Link[]): { full: string[]; collapsed: string[] } {
 
   let idx = 1;
   for (const [host, hostLinks] of byHost) {
-    fullLines.push(pad(2) + C.cyan(host));
+    fullLines.push(pad(2) + (noColor ? host : C.cyan(host)));
     for (const link of hostLinks) {
-      const num = C.yellow(`[${idx}]`);
+      const num = noColor ? `[${idx}]` : C.yellow(`[${idx}]`);
       const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
       const wrapped = wrap(text, CONTENT_WIDTH - 10);
-      fullLines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
+      fullLines.push(pad(4) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
       for (let j = 1; j < wrapped.length; j++) {
         fullLines.push(pad(8) + wrapped[j]);
       }
-      fullLines.push(pad(8) + C.muted.underline(link.url));
+      const urlLine = noColor ? link.url : osc8(link.url, C.muted.underline(link.url));
+      fullLines.push(pad(8) + urlLine);
       idx++;
     }
     fullLines.push("");
@@ -313,24 +371,25 @@ function renderLinks(links: Link[]): { full: string[]; collapsed: string[] } {
   collapsedLines.push("");
   collapsedLines.push(pad(2) + hr());
   collapsedLines.push("");
-  collapsedLines.push(pad(2) + C.yellow.bold("🔗 Links") + C.muted(` (${links.length})`));
+  collapsedLines.push(pad(2) + linksTitle + linksCount);
   collapsedLines.push("");
 
   idx = 1;
   let shown = 0;
   for (const [host, hostLinks] of byHost) {
     if (shown >= 5) break;
-    collapsedLines.push(pad(2) + C.cyan(host));
+    collapsedLines.push(pad(2) + (noColor ? host : C.cyan(host)));
     for (const link of hostLinks) {
       if (shown >= 5) break;
-      const num = C.yellow(`[${idx}]`);
+      const num = noColor ? `[${idx}]` : C.yellow(`[${idx}]`);
       const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
       const wrapped = wrap(text, CONTENT_WIDTH - 10);
-      collapsedLines.push(pad(4) + num + " " + C.white(wrapped[0] || ""));
+      collapsedLines.push(pad(4) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
       for (let j = 1; j < wrapped.length; j++) {
         collapsedLines.push(pad(8) + wrapped[j]);
       }
-      collapsedLines.push(pad(8) + C.muted.underline(link.url));
+      const urlLine = noColor ? link.url : osc8(link.url, C.muted.underline(link.url));
+      collapsedLines.push(pad(8) + urlLine);
       idx++;
       shown++;
     }
@@ -338,7 +397,11 @@ function renderLinks(links: Link[]): { full: string[]; collapsed: string[] } {
   }
 
   const remaining = links.length - shown;
-  collapsedLines.push(pad(2) + C.subtle(`  ${remaining} more  ·  press `) + C.yellow("e") + C.subtle(" to expand"));
+  if (noColor) {
+    collapsedLines.push(pad(2) + `  ${remaining} more  ·  press e to expand`);
+  } else {
+    collapsedLines.push(pad(2) + C.subtle(`  ${remaining} more  ·  press `) + C.yellow("e") + C.subtle(" to expand"));
+  }
   collapsedLines.push("");
 
   return { full: fullLines, collapsed: collapsedLines };
@@ -397,8 +460,8 @@ export function renderArticle(
   }
 
   // ── Links section
-  const linksStart = lines.length;
-  const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links);
+  const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links, noColor);
+  const linksStart = linksFull.length ? lines.length : -1;
   for (const l of linksCollapsed) {
     lines.push(l);
   }
@@ -407,7 +470,9 @@ export function renderArticle(
   lines.push("");
   lines.push(pad(2) + hr());
   lines.push("");
-  lines.push(pad(2) + C.muted("source: ") + "\x1b]8;;" + article.url + "\x07" + C.cyan.underline(article.url) + "\x1b]8;;\x07");
+  const sourceLabel = noColor ? "source: " : C.muted("source: ");
+  const sourceUrl = noColor ? article.url : osc8(article.url, C.cyan.underline(article.url));
+  lines.push(pad(2) + sourceLabel + sourceUrl);
   lines.push("");
 
   // ── Page breaks (every ~terminal-height lines)
