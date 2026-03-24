@@ -27,6 +27,7 @@ const C = {
   subtle:  chalk.hex("#45475a"),
   white:   chalk.hex("#d9e0ee"),
   code:    chalk.bgHex("#313244").hex("#a6e3a1"),
+  codeBlock: chalk.bgHex("#1e1e2e").hex("#a6e3a1"),
 };
 
 const SITE_ACCENT = [C.purple, C.blue, C.cyan, C.green, C.yellow, C.red, C.white];
@@ -43,6 +44,53 @@ function siteAccentColor(url: string, themeColor: string | null) {
 
 function osc8(url: string, text: string): string {
   return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07";
+}
+
+function smartenText(input: string): string {
+  let s = input;
+  s = s.replace(/\.{3}/g, "…");
+  s = s.replace(/---/g, "—").replace(/--/g, "—");
+  s = s.replace(/\b([A-Z])\. ([A-Z])\./g, "$1.\u00a0$2.");
+  s = smartQuotes(s);
+  return s;
+}
+
+function smartQuotes(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    const prev = i > 0 ? s[i - 1] : "";
+    const next = i + 1 < s.length ? s[i + 1] : "";
+
+    if (ch === "\"") {
+      const isOpen = !prev || /[\s([{<]/.test(prev);
+      out += isOpen ? "“" : "”";
+      continue;
+    }
+    if (ch === "'") {
+      const isApos = /[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next);
+      if (isApos) {
+        out += "’";
+      } else {
+        const isOpen = !prev || /[\s([{<]/.test(prev);
+        out += isOpen ? "‘" : "’";
+      }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function smartenInline(text: string): string {
+  const parts = text.split(/(`[^`]*`)/g);
+  return parts.map((part) => {
+    if (part.startsWith("`") && part.endsWith("`")) return part;
+    const segs = part.split(/(https?:\/\/\S+)/g);
+    return segs
+      .map((seg) => (seg.startsWith("http") ? seg : smartenText(seg)))
+      .join("");
+  }).join("");
 }
 
 function wrap(text: string, width: number): string[] {
@@ -107,6 +155,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 
   let inCode = false;
   let codeBuffer: string[] = [];
+  let codeLang = "";
 
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i];
@@ -116,15 +165,17 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       if (!inCode) {
         inCode = true;
         codeBuffer = [];
+        codeLang = raw.replace("```", "").trim();
       } else {
         inCode = false;
-        const lang = raw.replace("```", "").trim();
+        const lang = codeLang;
         lines.push("");
         lines.push(pad(2) + C.subtle("┌─ ") + C.muted(lang || "code") + C.subtle(" " + "─".repeat(Math.max(0, CONTENT_WIDTH - 4 - (lang || "code").length))));
         for (const cl of codeBuffer) {
           const wrapped = wrapCode(cl, CONTENT_WIDTH - 4);
           for (const wl of wrapped) {
-            lines.push(pad(2) + C.subtle("│ ") + C.green(wl));
+            const padded = wl.padEnd(CONTENT_WIDTH - 4, " ");
+            lines.push(pad(2) + C.subtle("│ ") + C.codeBlock(padded));
           }
         }
         lines.push(pad(2) + C.subtle("└" + "─".repeat(CONTENT_WIDTH - 2)));
@@ -141,7 +192,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     // headings
     if (raw.startsWith("###### ")) {
       lines.push("");
-      const text = raw.slice(7);
+      const text = smartenInline(raw.slice(7));
       for (const l of wrap(text, CONTENT_WIDTH)) {
         lines.push(pad(2) + C.yellow.bold(l));
       }
@@ -150,7 +201,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
     if (raw.startsWith("##### ")) {
       lines.push("");
-      const text = raw.slice(6);
+      const text = smartenInline(raw.slice(6));
       for (const l of wrap(text, CONTENT_WIDTH)) {
         lines.push(pad(2) + C.cyan.bold(l));
       }
@@ -159,7 +210,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
     if (raw.startsWith("#### ")) {
       lines.push("");
-      const text = raw.slice(5);
+      const text = smartenInline(raw.slice(5));
       for (const l of wrap(text, CONTENT_WIDTH)) {
         lines.push(pad(2) + C.green.bold(l));
       }
@@ -168,27 +219,31 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
     if (raw.startsWith("### ")) {
       lines.push("");
-      const text = raw.slice(4);
-      for (const l of wrap(text, CONTENT_WIDTH)) {
-        lines.push(pad(2) + C.cyan.bold(l));
+      const text = smartenInline(raw.slice(4));
+      const wrapped = wrap(text, CONTENT_WIDTH - 4);
+      lines.push(pad(2) + C.cyan.bold("### ") + (wrapped[0] || ""));
+      for (let j = 1; j < wrapped.length; j++) {
+        lines.push(pad(6) + wrapped[j]);
       }
       lines.push("");
       continue;
     }
     if (raw.startsWith("## ")) {
       lines.push("");
-      const text = raw.slice(3);
-      for (const l of wrap(text, CONTENT_WIDTH)) {
-        lines.push(pad(2) + C.blue.bold("▋ ") + C.blue.bold(l));
+      const text = smartenInline(raw.slice(3));
+      const wrapped = wrap(text, CONTENT_WIDTH - 4);
+      lines.push(pad(2) + C.blue.bold("## ") + C.blue.bold(wrapped[0] || ""));
+      for (let j = 1; j < wrapped.length; j++) {
+        lines.push(pad(6) + wrapped[j]);
       }
-      lines.push(pad(2) + C.subtle("─".repeat(Math.min(stripAnsi(text).length + 2, CONTENT_WIDTH))));
       lines.push("");
       continue;
     }
     if (raw.startsWith("# ")) {
       lines.push("");
-      const text = raw.slice(2);
-      for (const l of wrap(text, CONTENT_WIDTH)) {
+      const text = smartenInline(raw.slice(2));
+      const wrapped = wrap(text, CONTENT_WIDTH);
+      for (const l of wrapped) {
         lines.push(pad(2) + C.purple.bold(l));
       }
       lines.push("");
@@ -209,10 +264,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
           lines.push(pad(2) + C.subtle("│ "));
           continue;
         }
-        const styled = styleInline(ql, noColor);
+        const styled = styleInline(smartenInline(ql), noColor);
         const wrapped = wrap(styled, CONTENT_WIDTH - 4);
         for (const wl of wrapped) {
-          lines.push(pad(2) + C.subtle("│ ") + C.muted(wl));
+          lines.push(pad(2) + C.subtle("│ ") + C.muted.italic(wl));
         }
       }
       lines.push("");
@@ -231,7 +286,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (/^\s*[-*+] /.test(raw)) {
       const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
       const text = raw.replace(/^\s*[-*+] /, "");
-      const styled = styleInline(text, noColor);
+      const styled = styleInline(smartenInline(text), noColor);
       const firstPrefix = pad(2 + indent) + C.yellow("•") + " ";
       const bulletWidth = 2; // bullet + space
       const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth);
@@ -248,7 +303,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
       const num = raw.match(/^\s*(\d+)\./)?.[1] ?? "1";
       const text = raw.replace(/^\s*\d+\. /, "");
-      const styled = styleInline(text, noColor);
+      const styled = styleInline(smartenInline(text), noColor);
       const bullet = `${num}.`;
       const bulletWidth = stripAnsi(bullet).length;
       const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth - 1);
@@ -266,7 +321,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
 
     // normal paragraph
-    const styled = styleInline(raw, noColor);
+    const styled = styleInline(smartenInline(raw), noColor);
     const wrapped = wrap(styled, CONTENT_WIDTH);
     for (const l of wrapped) {
       lines.push(pad(2) + l);
@@ -420,12 +475,13 @@ export function renderArticle(
   // ── Site name
   if (article.siteName) {
     const accent = siteAccentColor(article.url, article.themeColor);
-    lines.push(pad(2) + accent(article.siteName.toUpperCase()));
+    const site = article.siteName.toUpperCase();
+    lines.push(pad(2) + accent("▍ ") + accent(site));
     lines.push("");
   }
 
   // ── Title
-  const titleLines = wrap(article.title, CONTENT_WIDTH);
+  const titleLines = wrap(smartenText(article.title), CONTENT_WIDTH);
   for (const l of titleLines) {
     lines.push(pad(2) + C.purple.bold(l));
   }
@@ -433,16 +489,23 @@ export function renderArticle(
 
   // ── Meta line
   const metaParts: string[] = [];
-  if (article.byline) metaParts.push(C.cyan(article.byline));
+  if (article.byline) metaParts.push(C.cyan(smartenText(article.byline)));
   if (article.publishedTime) metaParts.push(C.muted(article.publishedTime));
   metaParts.push(C.green(`~${article.readingTime} min read`));
   metaParts.push(C.muted(`${article.wordCount.toLocaleString()} words`));
-  lines.push(pad(2) + metaParts.join(C.subtle("  ·  ")));
+  const metaLine = noColor
+    ? metaParts.map(stripAnsi).join("  ·  ")
+    : metaParts.join(C.subtle("  ·  "));
+  lines.push(pad(2) + metaLine);
 
   // ── Tags
   if (article.tags.length) {
     const tagStr = article.tags
-      .map((t) => C.subtle("[") + C.muted(t) + C.subtle("]"))
+      .map((t) => {
+        if (noColor) return `[${t}]`;
+        const pill = chalk.bgHex("#313244").hex("#89b4fa")(" " + t + " ");
+        return pill;
+      })
       .join(" ");
     lines.push(pad(2) + tagStr);
   }
