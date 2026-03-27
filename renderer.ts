@@ -132,6 +132,48 @@ function stripAnsi(str: string): string {
     .replace(/\x1b\[[0-9;]*m/g, "");          // SGR color codes
 }
 
+function typographicStyle(text: string, noColor: boolean): string {
+  if (noColor) return text
+    .replace(/—/g, "--")
+    .replace(/…/g, "...")
+    .replace(/[""]/g, "\"")
+    .replace(/['']/g, "'");
+  const ansiPart = "(?:\\x1b\\[[0-9;]*m|\\x1b\\]8;;[^\\x07]*\\x07|\\x1b\\]8;;\\x07)";
+  const dblCurlyRe = new RegExp(`“(?:${ansiPart}|[^”])*”`, "g");
+  const dblStraightRe = new RegExp(`\"(?:${ansiPart}|[^\"])*\"`, "g");
+  const placeholders: string[] = [];
+  const withCurly = text.replace(dblCurlyRe, (m) => {
+    const styled = applyBaseStyle(m, C.muted);
+    const token = `~~TERMREAD_QUOTE_${placeholders.length}~~`;
+    placeholders.push(styled);
+    return token;
+  });
+  const withBoth = withCurly.replace(dblStraightRe, (m) => {
+    const styled = applyBaseStyle(m, C.muted);
+    const token = `~~TERMREAD_QUOTE_${placeholders.length}~~`;
+    placeholders.push(styled);
+    return token;
+  });
+  const withLooseQuotes = withBoth
+    .replace(/[“”]/g, (q) => C.muted(q))
+    .replace(/"/g, (q) => C.muted(q));
+  return withLooseQuotes.replace(/~~TERMREAD_QUOTE_(\d+)~~/g, (_m, idx) => {
+    const pick = placeholders[parseInt(idx)];
+    return pick ?? "";
+  });
+}
+
+function applyBaseStyle(text: string, style: (s: string) => string): string {
+  const sentinel = "__STYLE__";
+  const styled = style(sentinel);
+  const idx = styled.indexOf(sentinel);
+  if (idx === -1) return text;
+  const open = styled.slice(0, idx);
+  const close = styled.slice(idx + sentinel.length);
+  const resetRe = /\x1b\[(0|39|49|22|23|24|27|28|29)m/g;
+  return open + text.replace(resetRe, (m) => m + open) + close;
+}
+
 function pad(n: number): string {
   return " ".repeat(n);
 }
@@ -199,8 +241,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("###### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(7));
-      for (const l of wrap(text, CONTENT_WIDTH)) {
-        lines.push(pad(2) + C.yellow.bold(l));
+      const styled = styleInline(text, noColor);
+      for (const l of wrap(styled, CONTENT_WIDTH)) {
+        const colored = noColor ? l : applyBaseStyle(l, C.yellow.bold);
+        lines.push(pad(2) + colored);
       }
       lines.push("");
       continue;
@@ -208,8 +252,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("##### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(6));
-      for (const l of wrap(text, CONTENT_WIDTH)) {
-        lines.push(pad(2) + C.cyan.bold(l));
+      const styled = styleInline(text, noColor);
+      for (const l of wrap(styled, CONTENT_WIDTH)) {
+        const colored = noColor ? l : applyBaseStyle(l, C.cyan.bold);
+        lines.push(pad(2) + colored);
       }
       lines.push("");
       continue;
@@ -217,8 +263,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("#### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(5));
-      for (const l of wrap(text, CONTENT_WIDTH)) {
-        lines.push(pad(2) + C.green.bold(l));
+      const styled = styleInline(text, noColor);
+      for (const l of wrap(styled, CONTENT_WIDTH)) {
+        const colored = noColor ? l : applyBaseStyle(l, C.green.bold);
+        lines.push(pad(2) + colored);
       }
       lines.push("");
       continue;
@@ -226,10 +274,15 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(4));
-      const wrapped = wrap(text, CONTENT_WIDTH - 4);
-      lines.push(pad(2) + C.cyan.bold("### ") + (wrapped[0] || ""));
+      const styled = styleInline(text, noColor);
+      const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+      const prefix = noColor ? "### " : C.cyan.bold("### ");
+      const first = wrapped[0] || "";
+      const firstColored = noColor ? first : applyBaseStyle(first, C.cyan.bold);
+      lines.push(pad(2) + prefix + firstColored);
       for (let j = 1; j < wrapped.length; j++) {
-        lines.push(pad(6) + wrapped[j]);
+        const colored = noColor ? wrapped[j] : applyBaseStyle(wrapped[j], C.cyan.bold);
+        lines.push(pad(6) + colored);
       }
       lines.push("");
       continue;
@@ -237,24 +290,29 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("## ")) {
       lines.push("");
       const text = smartenInline(raw.slice(3));
-      const wrapped = wrap(text, CONTENT_WIDTH - 4);
-      lines.push(pad(2) + C.blue.bold("## ") + C.blue.bold(wrapped[0] || ""));
+      const styled = styleInline(text, noColor);
+      const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+      const prefix = noColor ? "## " : C.blue.bold("## ");
+      const first = wrapped[0] || "";
+      const firstColored = noColor ? first : applyBaseStyle(first, C.blue.bold);
+      lines.push(pad(2) + prefix + firstColored);
       for (let j = 1; j < wrapped.length; j++) {
-        lines.push(pad(6) + wrapped[j]);
+        const colored = noColor ? wrapped[j] : applyBaseStyle(wrapped[j], C.blue.bold);
+        lines.push(pad(6) + colored);
       }
-      const underlineLen = Math.min(CONTENT_WIDTH, stripAnsi(wrapped[0] || text).length + 3);
-      const thickLen = Math.floor(underlineLen * 0.4);
-      const thinLen = underlineLen - thickLen;
-      lines.push(pad(2) + C.blue("━".repeat(thickLen)) + C.subtle("─".repeat(thinLen)));
+      const underlineLen = Math.min(CONTENT_WIDTH, stripAnsi(first || text).length + 3);
+      lines.push(pad(2) + (noColor ? "─".repeat(underlineLen) : C.subtle("─".repeat(underlineLen))));
       lines.push("");
       continue;
     }
     if (raw.startsWith("# ")) {
       lines.push("");
       const text = smartenInline(raw.slice(2));
-      const wrapped = wrap(text, CONTENT_WIDTH);
+      const styled = styleInline(text, noColor);
+      const wrapped = wrap(styled, CONTENT_WIDTH);
       for (const l of wrapped) {
-        lines.push(pad(2) + C.purple.bold(l));
+        const colored = noColor ? l : applyBaseStyle(l, C.purple.bold);
+        lines.push(pad(2) + colored);
       }
       lines.push("");
       continue;
@@ -274,19 +332,20 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       const frameRight = noColor ? " │" : C.green(" │");
       for (const ql of quoteLines) {
         if (!ql.trim()) {
-          lines.push(pad(2) + frameLeft + pad(innerWidth) + frameRight);
+          const blank = pad(innerWidth);
+          const coloredBlank = noColor ? blank : applyBaseStyle(blank, C.muted);
+          lines.push(pad(2) + frameLeft + coloredBlank + frameRight);
           continue;
         }
-        const styled = styleInline(smartenInline(ql), noColor);
+        const smartened = smartenInline(ql);
+        const styled = styleInline(smartened, noColor);
         const wrapped = wrap(styled, innerWidth);
         for (const wl of wrapped) {
-          const padded = wl.padEnd(innerWidth, " ");
-          lines.push(
-            pad(2) +
-            frameLeft +
-            C.muted.italic(padded) +
-            frameRight
-          );
+          const visLen = stripAnsi(wl).length;
+          const padding = " ".repeat(Math.max(0, innerWidth - visLen));
+          const content = wl + padding;
+          const colored = noColor ? content : applyBaseStyle(content, C.muted);
+          lines.push(pad(2) + frameLeft + colored + frameRight);
         }
       }
       lines.push("");
@@ -395,14 +454,13 @@ function styleInline(text: string, noColor: boolean): string {
     .replace(/\*(.+?)\*/g, (_, t) => C.white.italic(t))
     .replace(/`([^`]+)`/g, (_, t) => C.subtle("`") + C.code(t) + C.subtle("`"))
     .replace(/https?:\/\/\S+/g, (u) => osc8(u, C.cyan.underline(u)))
-    .replace(/—/g, C.muted("—"))
-    .replace(/…/g, C.subtle("…"))
-    .replace(/[""]/g, (q) => C.blue(q))
-    .replace(/['']/g, (q) => C.blue(q))
     .replace(/[*_]/g, "");
 
+  // Phase 2b: apply typographic colors
+  const withTypo = typographicStyle(styled, false);
+
   // Phase 3: replace placeholders with styled OSC 8 links
-  return styled.replace(/@@(\d+)@@/g, (_match: string, idxStr: string) => {
+  return withTypo.replace(/@@(\d+)@@/g, (_match: string, idxStr: string) => {
     const info = linkInfos[parseInt(idxStr)];
     if (!info) return "";
     return osc8(info.url, C.cyan.underline(info.label)) + C.muted(" (" + info.host + ")");
@@ -592,7 +650,13 @@ export function renderArticle(
   }
 
   // ── Plain text version
-  const plain = lines.map(stripAnsi).join("\n");
+  const plain = lines
+    .map(stripAnsi)
+    .join("\n")
+    .replace(/—/g, "--")
+    .replace(/…/g, "...")
+    .replace(/[""]/g, "\"")
+    .replace(/['']/g, "'");
 
   return { lines, plain, pageBreaks, linksStart, linksFull, linksCollapsed };
 }
