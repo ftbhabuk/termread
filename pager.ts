@@ -29,7 +29,9 @@ function renderStatusBar(
   searching: boolean,
   searchTerm: string,
   hasLinks: boolean,
-  linksExpanded: boolean
+  linksExpanded: boolean,
+  matchIdx: number,
+  matchTotal: number
 ) {
   const { cols } = getTermSize();
   const pct = Math.round((topLine / Math.max(1, totalLines - 1)) * 100);
@@ -37,9 +39,15 @@ function renderStatusBar(
     try { return new URL(article.url).hostname; } catch { return article.url; }
   })();
 
+  const matchInfo = searchTerm && matchTotal > 0
+    ? C.yellow(` ${matchIdx}/${matchTotal}`)
+    : searchTerm && !searching
+    ? C.subtle(" no matches")
+    : "";
+
   const left = searching
-    ? C.yellow(" / ") + C.muted(searchTerm) + C.subtle("_")
-    : C.subtle(" ") + C.muted(domain);
+    ? C.yellow(" / ") + C.muted(searchTerm) + C.subtle("_") + matchInfo
+    : C.subtle(" ") + C.muted(domain) + matchInfo;
 
   const mid = C.subtle(article.siteName || "");
 
@@ -101,7 +109,9 @@ function renderPage(
   searchTerm: string,
   highlightLine: number,
   hasLinks: boolean,
-  linksExpanded: boolean
+  linksExpanded: boolean,
+  matchIdx: number,
+  matchTotal: number
 ) {
   const { rows } = getTermSize();
   const viewHeight = rows - 1;
@@ -122,7 +132,7 @@ function renderPage(
     }
   }
 
-  renderStatusBar(article, topLine, lines.length, searching, searchTerm, hasLinks, linksExpanded);
+  renderStatusBar(article, topLine, lines.length, searching, searchTerm, hasLinks, linksExpanded, matchIdx, matchTotal);
 }
 
 function escapeRe(s: string) {
@@ -142,6 +152,22 @@ function findNext(lines: string[], term: string, from: number): number {
   return -1;
 }
 
+function countMatches(lines: string[], term: string): number {
+  if (!term) return 0;
+  const re = new RegExp(escapeRe(term), "gi");
+  return lines.filter((l) => re.test(stripAnsi(l))).length;
+}
+
+function findMatchIndex(lines: string[], term: string, lineNum: number): number {
+  if (!term) return 0;
+  const re = new RegExp(escapeRe(term), "gi");
+  let count = 0;
+  for (let i = 0; i <= lineNum && i < lines.length; i++) {
+    if (re.test(stripAnsi(lines[i]))) count++;
+  }
+  return count;
+}
+
 export async function startPager(
   rendered: RenderedArticle,
   article: Article
@@ -158,6 +184,8 @@ export async function startPager(
   let searchTerm = "";
   let highlightLine = -1;
   let linksExpanded = false;
+  let matchIdx = 0;
+  let matchTotal = 0;
   const hasLinks = rendered.linksStart >= 0 && rendered.linksFull.length > 0;
 
   enterAltScreen();
@@ -172,7 +200,7 @@ export async function startPager(
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -194,19 +222,26 @@ export async function startPager(
         if (found !== -1) {
           topLine = clamp(found, 0, maxT);
           highlightLine = found;
+          matchTotal = countMatches(lines, searchTerm);
+          matchIdx = findMatchIndex(lines, searchTerm, found);
+        } else {
+          matchTotal = 0;
+          matchIdx = 0;
         }
         searching = false;
       } else if (key === "\x1b" || key === "\x03") {
         searching = false;
         searchTerm = "";
         highlightLine = -1;
+        matchIdx = 0;
+        matchTotal = 0;
       } else if (key === "\x7f") {
         searchTerm = searchTerm.slice(0, -1);
       } else if (key.charCodeAt(0) >= 32) {
         searchTerm += key;
       }
 
-      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
       return;
     }
 
@@ -273,6 +308,7 @@ export async function startPager(
           if (found !== -1) {
             topLine = clamp(found, 0, maxT);
             highlightLine = found;
+            matchIdx = findMatchIndex(lines, searchTerm, found);
           }
         }
         break;
@@ -309,7 +345,7 @@ export async function startPager(
         break;
     }
 
-    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded);
+    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
   });
 
   // keep alive
