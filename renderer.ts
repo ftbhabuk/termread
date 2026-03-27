@@ -136,6 +136,11 @@ function pad(n: number): string {
   return " ".repeat(n);
 }
 
+function compactNum(n: number): string {
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return n.toString();
+}
+
 function hr(): string {
   return C.subtle("─".repeat(CONTENT_WIDTH));
 }
@@ -493,9 +498,10 @@ export function renderArticle(
   // ── Top spacer
   lines.push("");
 
+  const accent = siteAccentColor(article.url, article.themeColor);
+
   // ── Site name
   if (article.siteName) {
-    const accent = siteAccentColor(article.url, article.themeColor);
     const site = article.siteName.toUpperCase();
     lines.push(pad(2) + accent("▍ ") + accent(site));
     lines.push("");
@@ -503,6 +509,7 @@ export function renderArticle(
 
   // ── Title
   const titleLines = wrap(smartenText(article.title), CONTENT_WIDTH);
+  lines.push(pad(2) + accent("┈".repeat(Math.min(CONTENT_WIDTH, 40))));
   for (const l of titleLines) {
     lines.push(pad(2) + C.purple.bold(l));
   }
@@ -513,7 +520,7 @@ export function renderArticle(
   if (article.byline) metaParts.push(C.cyan(smartenText(article.byline)));
   if (article.publishedTime) metaParts.push(C.muted(article.publishedTime));
   metaParts.push(C.green(`~${article.readingTime} min read`));
-  metaParts.push(C.muted(`${article.wordCount.toLocaleString()} words`));
+  metaParts.push(C.muted(`${compactNum(article.wordCount)} words`));
   const metaLine = noColor
     ? metaParts.map(stripAnsi).join("  ·  ")
     : metaParts.join(C.subtle("  ·  "));
@@ -524,8 +531,7 @@ export function renderArticle(
     const tagStr = article.tags
       .map((t) => {
         if (noColor) return `[${t}]`;
-        const pill = chalk.bgHex("#313244").hex("#89b4fa")("  " + t + "  ");
-        return pill;
+        return C.subtle("╰") + C.blue(" " + t + " ") + C.subtle("╯");
       })
       .join("  ");
     lines.push(pad(2) + tagStr);
