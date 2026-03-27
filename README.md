@@ -24,6 +24,9 @@ echo 'alias termread="bun run '$(pwd)'/cli.ts"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
+Other shells:
+Use your shell’s rc file instead of `~/.zshrc` (for example: `~/.bashrc` for Bash, `~/.config/fish/config.fish` for Fish).
+
 **Or run directly without installing:**
 ```bash
 bun run cli.ts https://example.com/article
@@ -80,6 +83,9 @@ termread https://example.com/article --raw | wc -w
 | `g` | go to top |
 | `G` | go to bottom |
 | `/` | search |
+| `Enter` | jump to next match |
+| `Esc` | cancel search |
+| `Backspace` | delete search char |
 | `n` | next search result |
 | `e` | expand/collapse links |
 | `o` | open in browser |

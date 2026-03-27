@@ -11,6 +11,8 @@ const C = {
   cyan:   chalk.hex("#89dceb"),
 };
 
+const ANSI_RE = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07|\x1b\]8;;\x07/g;
+
 function getTermSize() {
   return {
     cols: process.stdout.columns || 80,
@@ -89,7 +91,81 @@ function renderStatusBar(
 }
 
 function stripAnsi(s: string) {
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
+  return s.replace(ANSI_RE, "");
+}
+
+function highlightMatchRange(line: string, start: number, end: number): string {
+  const tokens: Array<{ text: string; visible: boolean }> = [];
+  let last = 0;
+  for (const match of line.matchAll(ANSI_RE)) {
+    const idx = match.index ?? 0;
+    if (idx > last) {
+      tokens.push({ text: line.slice(last, idx), visible: true });
+    }
+    tokens.push({ text: match[0], visible: false });
+    last = idx + match[0].length;
+  }
+  if (last < line.length) tokens.push({ text: line.slice(last), visible: true });
+
+  const hl = chalk.bgHex("#f9e2af").hex("#1a1b1e");
+  let out = "";
+  let visibleIdx = 0;
+
+  for (const token of tokens) {
+    if (!token.visible) {
+      out += token.text;
+      continue;
+    }
+
+    const segStart = visibleIdx;
+    const segEnd = segStart + token.text.length;
+    if (end <= segStart || start >= segEnd) {
+      out += token.text;
+    } else {
+      const localStart = Math.max(start, segStart) - segStart;
+      const localEnd = Math.min(end, segEnd) - segStart;
+      out += token.text.slice(0, localStart);
+      out += hl(token.text.slice(localStart, localEnd));
+      out += token.text.slice(localEnd);
+    }
+    visibleIdx = segEnd;
+  }
+
+  return out;
+}
+
+interface MatchPos {
+  line: number;
+  start: number;
+  end: number;
+}
+
+function findMatches(lines: string[], term: string): MatchPos[] {
+  if (!term) return [];
+  const out: MatchPos[] = [];
+  const reSrc = escapeRe(term);
+  for (let i = 0; i < lines.length; i++) {
+    const plain = stripAnsi(lines[i]);
+    const re = new RegExp(reSrc, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(plain)) !== null) {
+      const start = m.index ?? 0;
+      const end = start + m[0].length;
+      out.push({ line: i, start, end });
+      if (re.lastIndex === start) re.lastIndex++;
+    }
+  }
+  return out;
+}
+
+function findNextMatchIndex(matches: MatchPos[], fromLine: number, fromStart: number): number {
+  if (!matches.length) return -1;
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (m.line > fromLine) return i;
+    if (m.line === fromLine && m.start > fromStart) return i;
+  }
+  return 0; // wrap
 }
 
 function clearScreen() {
@@ -108,6 +184,7 @@ function renderPage(
   searching: boolean,
   searchTerm: string,
   highlightLine: number,
+  highlightRange: { start: number; end: number } | null,
   hasLinks: boolean,
   linksExpanded: boolean,
   matchIdx: number,
@@ -122,10 +199,8 @@ function renderPage(
     const l = visible[i] ?? "";
     const absLine = topLine + i;
 
-    if (highlightLine === absLine && searchTerm) {
-      // highlight search match
-      const re = new RegExp(escapeRe(searchTerm), "gi");
-      const highlighted = l.replace(re, (m) => chalk.bgHex("#f9e2af").hex("#1a1b1e")(m));
+    if (highlightLine === absLine && searchTerm && highlightRange) {
+      const highlighted = highlightMatchRange(l, highlightRange.start, highlightRange.end);
       process.stdout.write(highlighted + "\n");
     } else {
       process.stdout.write(l + "\n");
@@ -137,35 +212,6 @@ function renderPage(
 
 function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function findNext(lines: string[], term: string, from: number): number {
-  if (!term) return -1;
-  const re = new RegExp(escapeRe(term), "i");
-  for (let i = from + 1; i < lines.length; i++) {
-    if (re.test(stripAnsi(lines[i]))) return i;
-  }
-  // wrap
-  for (let i = 0; i <= from; i++) {
-    if (re.test(stripAnsi(lines[i]))) return i;
-  }
-  return -1;
-}
-
-function countMatches(lines: string[], term: string): number {
-  if (!term) return 0;
-  const re = new RegExp(escapeRe(term), "gi");
-  return lines.filter((l) => re.test(stripAnsi(l))).length;
-}
-
-function findMatchIndex(lines: string[], term: string, lineNum: number): number {
-  if (!term) return 0;
-  const re = new RegExp(escapeRe(term), "gi");
-  let count = 0;
-  for (let i = 0; i <= lineNum && i < lines.length; i++) {
-    if (re.test(stripAnsi(lines[i]))) count++;
-  }
-  return count;
 }
 
 export async function startPager(
@@ -183,9 +229,12 @@ export async function startPager(
   let searching = false;
   let searchTerm = "";
   let highlightLine = -1;
+  let highlightRange: { start: number; end: number } | null = null;
   let linksExpanded = false;
   let matchIdx = 0;
   let matchTotal = 0;
+  let matchPos = -1;
+  let matches: MatchPos[] = [];
   const hasLinks = rendered.linksStart >= 0 && rendered.linksFull.length > 0;
 
   enterAltScreen();
@@ -200,7 +249,7 @@ export async function startPager(
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
+  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -218,30 +267,38 @@ export async function startPager(
     if (searching) {
       if (key === "\r" || key === "\n") {
         // confirm search
-        const found = findNext(lines, searchTerm, topLine - 1);
-        if (found !== -1) {
-          topLine = clamp(found, 0, maxT);
-          highlightLine = found;
-          matchTotal = countMatches(lines, searchTerm);
-          matchIdx = findMatchIndex(lines, searchTerm, found);
+        matches = findMatches(lines, searchTerm);
+        matchTotal = matches.length;
+        if (matchTotal > 0) {
+          matchPos = findNextMatchIndex(matches, topLine - 1, -1);
+          const m = matches[matchPos];
+          highlightLine = m.line;
+          highlightRange = { start: m.start, end: m.end };
+          matchIdx = matchPos + 1;
+          topLine = clamp(m.line, 0, maxT);
         } else {
-          matchTotal = 0;
+          matchPos = -1;
           matchIdx = 0;
+          highlightLine = -1;
+          highlightRange = null;
         }
         searching = false;
       } else if (key === "\x1b" || key === "\x03") {
         searching = false;
         searchTerm = "";
         highlightLine = -1;
+        highlightRange = null;
         matchIdx = 0;
         matchTotal = 0;
+        matchPos = -1;
+        matches = [];
       } else if (key === "\x7f") {
         searchTerm = searchTerm.slice(0, -1);
       } else if (key.charCodeAt(0) >= 32) {
         searchTerm += key;
       }
 
-      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
+      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
       return;
     }
 
@@ -299,17 +356,23 @@ export async function startPager(
       case "/":
         searching = true;
         searchTerm = "";
+        matchIdx = 0;
+        matchTotal = 0;
+        matchPos = -1;
+        matches = [];
+        highlightLine = -1;
+        highlightRange = null;
         break;
 
       // next search result
       case "n":
-        if (searchTerm) {
-          const found = findNext(lines, searchTerm, topLine);
-          if (found !== -1) {
-            topLine = clamp(found, 0, maxT);
-            highlightLine = found;
-            matchIdx = findMatchIndex(lines, searchTerm, found);
-          }
+        if (searchTerm && matches.length) {
+          matchPos = (matchPos + 1) % matches.length;
+          const m = matches[matchPos];
+          highlightLine = m.line;
+          highlightRange = { start: m.start, end: m.end };
+          matchIdx = matchPos + 1;
+          topLine = clamp(m.line, 0, maxT);
         }
         break;
 
@@ -341,11 +404,29 @@ export async function startPager(
             ...newLinkLines,
             ...lines.slice(afterLinks),
           ];
+          if (searchTerm) {
+            matches = findMatches(lines, searchTerm);
+            matchTotal = matches.length;
+            if (matchTotal > 0) {
+              const fromLine = highlightLine >= 0 ? highlightLine : topLine - 1;
+              const fromStart = highlightRange ? highlightRange.start : -1;
+              matchPos = findNextMatchIndex(matches, fromLine, fromStart);
+              const m = matches[matchPos];
+              highlightLine = m.line;
+              highlightRange = { start: m.start, end: m.end };
+              matchIdx = matchPos + 1;
+            } else {
+              matchPos = -1;
+              matchIdx = 0;
+              highlightLine = -1;
+              highlightRange = null;
+            }
+          }
         }
         break;
     }
 
-    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, hasLinks, linksExpanded, matchIdx, matchTotal);
+    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
   });
 
   // keep alive
