@@ -351,6 +351,10 @@ function styleInline(text: string, noColor: boolean): string {
       .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
       .replace(/\*\*(.+?)\*\*/g, "$1")
       .replace(/\*(.+?)\*/g, "$1")
+      .replace(/—/g, "--")
+      .replace(/…/g, "...")
+      .replace(/[""]/g, "\"")
+      .replace(/['']/g, "'")
       .replace(/[*_]/g, "");
   }
 
@@ -369,12 +373,16 @@ function styleInline(text: string, noColor: boolean): string {
 
   // Phase 2: apply all inline styles + bare URL wrapping
   const styled = withPlaceholders
-    .replace(/~~(.+?)~~/g, (_, t) => C.muted.strikethrough(t))
+    .replace(/~~(.+?)~~/g, (_, t) => C.red.strikethrough(t))
     .replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => C.white.bold.italic(t))
     .replace(/\*\*(.+?)\*\*/g, (_, t) => C.white.bold(t))
     .replace(/\*(.+?)\*/g, (_, t) => C.white.italic(t))
     .replace(/`([^`]+)`/g, (_, t) => C.subtle("`") + C.code(t) + C.subtle("`"))
     .replace(/https?:\/\/\S+/g, (u) => osc8(u, C.cyan.underline(u)))
+    .replace(/—/g, C.muted("—"))
+    .replace(/…/g, C.subtle("…"))
+    .replace(/[""]/g, (q) => C.blue(q))
+    .replace(/['']/g, (q) => C.blue(q))
     .replace(/[*_]/g, "");
 
   // Phase 3: replace placeholders with styled OSC 8 links
