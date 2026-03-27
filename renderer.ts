@@ -161,6 +161,7 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
   let inCode = false;
   let codeBuffer: string[] = [];
   let codeLang = "";
+  let firstParagraph = true;
 
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i];
@@ -340,9 +341,17 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 
     // normal paragraph
     const styled = styleInline(smartenInline(raw), noColor);
-    const wrapped = wrap(styled, CONTENT_WIDTH - 2);
-    for (let j = 0; j < wrapped.length; j++) {
-      lines.push(pad(2) + (j === 0 ? "    " : "") + wrapped[j]);
+    if (firstParagraph) {
+      const wrapped = wrap(styled, CONTENT_WIDTH - 2);
+      for (let j = 0; j < wrapped.length; j++) {
+        lines.push(pad(2) + (j === 0 ? "    " : "") + wrapped[j]);
+      }
+      firstParagraph = false;
+    } else {
+      const wrapped = wrap(styled, CONTENT_WIDTH);
+      for (const l of wrapped) {
+        lines.push(pad(2) + l);
+      }
     }
   }
 
@@ -531,7 +540,7 @@ export function renderArticle(
     const tagStr = article.tags
       .map((t) => {
         if (noColor) return `[${t}]`;
-        return C.subtle("╰") + C.blue(" " + t + " ") + C.subtle("╯");
+        return C.subtle("[") + C.blue(" " + t + " ") + C.subtle("]");
       })
       .join("  ");
     lines.push(pad(2) + tagStr);
