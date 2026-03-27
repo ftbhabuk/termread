@@ -237,7 +237,9 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
         lines.push(pad(6) + wrapped[j]);
       }
       const underlineLen = Math.min(CONTENT_WIDTH, stripAnsi(wrapped[0] || text).length + 3);
-      lines.push(pad(2) + C.subtle("─".repeat(underlineLen)));
+      const thickLen = Math.floor(underlineLen * 0.4);
+      const thinLen = underlineLen - thickLen;
+      lines.push(pad(2) + C.blue("━".repeat(thickLen)) + C.subtle("─".repeat(thinLen)));
       lines.push("");
       continue;
     }
@@ -333,9 +335,9 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 
     // normal paragraph
     const styled = styleInline(smartenInline(raw), noColor);
-    const wrapped = wrap(styled, CONTENT_WIDTH);
-    for (const l of wrapped) {
-      lines.push(pad(2) + l);
+    const wrapped = wrap(styled, CONTENT_WIDTH - 2);
+    for (let j = 0; j < wrapped.length; j++) {
+      lines.push(pad(2) + (j === 0 ? "    " : "") + wrapped[j]);
     }
   }
 
@@ -541,6 +543,11 @@ export function renderArticle(
     lines.push(l);
   }
 
+  // ── Article end marker
+  lines.push("");
+  lines.push(pad(2) + C.subtle("╌ ╌ ╌"));
+  lines.push("");
+
   // ── Links section
   const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links, noColor);
   const linksStart = linksFull.length ? lines.length : -1;
@@ -550,7 +557,12 @@ export function renderArticle(
 
   // ── Footer
   lines.push("");
-  lines.push(pad(2) + hr());
+  if (noColor) {
+    lines.push(pad(2) + "· · · · · · · · · ·");
+  } else {
+    const dots = C.text("·") + " " + C.white("·") + " " + C.muted("·") + " " + C.subtle("·") + " " + C.subtle(" ·  ·  ·  ·  ·");
+    lines.push(pad(2) + dots);
+  }
   lines.push("");
   const sourceLabel = noColor ? "source: " : C.muted("source: ");
   const sourceUrl = noColor ? article.url : osc8(article.url, C.cyan.underline(article.url));
