@@ -134,8 +134,15 @@ function extractLinks(doc: Document, baseUrl: string): Link[] {
   return links;
 }
 
-export async function fetchArticle(url: string): Promise<Article> {
-  process.stderr.write(`\r  \x1b[36mfetching\x1b[0m  ${url}\n`);
+export async function fetchArticle(
+  url: string,
+  opts: { quiet?: boolean } = {}
+): Promise<Article> {
+  const quiet = opts.quiet ?? false;
+
+  if (!quiet) {
+    process.stderr.write(`\r  \x1b[36mfetching\x1b[0m  ${url}\n`);
+  }
 
   const res = await fetch(url, { headers: HEADERS });
 
@@ -144,9 +151,11 @@ export async function fetchArticle(url: string): Promise<Article> {
   }
 
   const html = await res.text();
-  process.stderr.write(
-    `\r  \x1b[36mextracting\x1b[0m  article content via readability...\n`
-  );
+  if (!quiet) {
+    process.stderr.write(
+      `\r  \x1b[36mextracting\x1b[0m  article content via readability...\n`
+    );
+  }
 
   // Extract theme-color before stripping CSS
   const themeColor = extractThemeColor(html);
@@ -171,22 +180,30 @@ export async function fetchArticle(url: string): Promise<Article> {
     throw new Error("Could not extract article content. The page may require JavaScript or a login.");
   }
 
-  const wordCount = parsed.textContent
+  const title = parsed.title || url;
+  const byline = parsed.byline || null;
+  const siteName = parsed.siteName || null;
+  const content = parsed.content || "";
+  const textContent = parsed.textContent || "";
+
+  const wordCount = textContent
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
   const readingTime = Math.max(1, Math.round(wordCount / 200));
 
-  process.stderr.write(
-    `\r  \x1b[32mrendering\x1b[0m  ~${readingTime} min read · ${wordCount.toLocaleString()} words\n`
-  );
+  if (!quiet) {
+    process.stderr.write(
+      `\r  \x1b[32mrendering\x1b[0m  ~${readingTime} min read · ${wordCount.toLocaleString()} words\n`
+    );
+  }
 
   return {
-    title: parsed.title,
-    byline: parsed.byline,
-    siteName: parsed.siteName,
-    content: parsed.content,
-    textContent: parsed.textContent,
+    title,
+    byline,
+    siteName,
+    content,
+    textContent,
     publishedTime,
     url,
     wordCount,

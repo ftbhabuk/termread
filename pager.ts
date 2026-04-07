@@ -1,6 +1,6 @@
-import type { RenderedArticle } from "./renderer";
-import type { Article } from "./fetcher";
 import chalk from "chalk";
+import { fetchArticle, type Article } from "./fetcher";
+import { renderArticle, type RenderedArticle } from "./renderer";
 
 const C = {
   green:  chalk.hex("#a6e3a1"),
@@ -9,9 +9,40 @@ const C = {
   subtle: chalk.hex("#45475a"),
   yellow: chalk.hex("#f9e2af"),
   cyan:   chalk.hex("#89dceb"),
+  red:    chalk.hex("#f38ba8"),
 };
 
 const ANSI_RE = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07|\x1b\]8;;\x07/g;
+
+interface HighlightRange {
+  start: number;
+  end: number;
+}
+
+interface MatchPos {
+  line: number;
+  start: number;
+  end: number;
+}
+
+interface PagerState {
+  article: Article;
+  rendered: RenderedArticle;
+  lines: string[];
+  topLine: number;
+  searching: boolean;
+  searchTerm: string;
+  highlightLine: number;
+  highlightRange: HighlightRange | null;
+  linksExpanded: boolean;
+  matchIdx: number;
+  matchTotal: number;
+  matchPos: number;
+  matches: MatchPos[];
+  openingLink: boolean;
+  linkInput: string;
+  flashMessage: string | null;
+}
 
 function getTermSize() {
   return {
@@ -24,46 +55,109 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function hasLinks(rendered: RenderedArticle): boolean {
+  return rendered.linksStart >= 0 && rendered.linksFull.length > 0;
+}
+
+function buildLines(rendered: RenderedArticle, linksExpanded: boolean): string[] {
+  if (!hasLinks(rendered)) return [...rendered.lines];
+
+  const beforeLinks = rendered.lines.slice(0, rendered.linksStart);
+  const afterLinks = rendered.lines.slice(rendered.linksStart + rendered.linksCollapsed.length);
+  const linkLines = linksExpanded ? rendered.linksFull : rendered.linksCollapsed;
+  return [...beforeLinks, ...linkLines, ...afterLinks];
+}
+
+function createPagerState(rendered: RenderedArticle, article: Article): PagerState {
+  return {
+    article,
+    rendered,
+    lines: buildLines(rendered, false),
+    topLine: 0,
+    searching: false,
+    searchTerm: "",
+    highlightLine: -1,
+    highlightRange: null,
+    linksExpanded: false,
+    matchIdx: 0,
+    matchTotal: 0,
+    matchPos: -1,
+    matches: [],
+    openingLink: false,
+    linkInput: "",
+    flashMessage: null,
+  };
+}
+
+function cloneState(state: PagerState): PagerState {
+  return {
+    ...state,
+    lines: [...state.lines],
+    matches: state.matches.map((match) => ({ ...match })),
+    highlightRange: state.highlightRange ? { ...state.highlightRange } : null,
+    openingLink: false,
+    linkInput: "",
+    flashMessage: null,
+  };
+}
+
+function normalNav(hasArticleLinks: boolean, hasHistory: boolean): string {
+  return C.muted(" j/k") + C.subtle(":scroll ") +
+    C.muted("d/u") + C.subtle(":page ") +
+    C.muted("/") + C.subtle(":search ") +
+    (hasArticleLinks ? C.muted("e") + C.subtle(":links ") : "") +
+    (hasArticleLinks ? C.muted("o") + C.subtle(":open ") : "") +
+    (hasHistory ? C.muted("h") + C.subtle(":back ") : "") +
+    C.muted("q") + C.subtle(":quit");
+}
+
 function renderStatusBar(
-  article: Article,
-  topLine: number,
-  totalLines: number,
-  searching: boolean,
-  searchTerm: string,
-  hasLinks: boolean,
-  linksExpanded: boolean,
-  matchIdx: number,
-  matchTotal: number
+  state: PagerState,
+  loadingMessage: string | null,
+  historyDepth: number
 ) {
   const { cols } = getTermSize();
-  const pct = Math.round((topLine / Math.max(1, totalLines - 1)) * 100);
+  const pct = Math.round((state.topLine / Math.max(1, state.lines.length - 1)) * 100);
   const domain = (() => {
-    try { return new URL(article.url).hostname; } catch { return article.url; }
+    try { return new URL(state.article.url).hostname; } catch { return state.article.url; }
   })();
+  const articleHasLinks = hasLinks(state.rendered);
+  const hasHistory = historyDepth > 0;
 
-  const matchInfo = searchTerm && matchTotal > 0
-    ? C.yellow(` ${matchIdx}/${matchTotal}`)
-    : searchTerm && !searching
+  const matchInfo = state.searchTerm && state.matchTotal > 0
+    ? C.yellow(` ${state.matchIdx}/${state.matchTotal}`)
+    : state.searchTerm && !state.searching
     ? C.subtle(" no matches")
     : "";
 
-  const left = searching
-    ? C.yellow(" / ") + C.muted(searchTerm) + C.subtle("_") + matchInfo
+  const left = loadingMessage
+    ? C.yellow(" loading ") + C.muted(loadingMessage)
+    : state.openingLink
+    ? C.yellow(" open ") +
+      C.muted(state.linkInput) +
+      C.subtle("_") +
+      C.subtle(` 1-${state.article.links.length}`)
+    : state.searching
+    ? C.yellow(" / ") + C.muted(state.searchTerm) + C.subtle("_") + matchInfo
+    : state.flashMessage
+    ? C.red(" note ") + C.muted(state.flashMessage)
     : C.subtle(" ") + C.muted(domain) + matchInfo;
 
-  const mid = C.subtle(article.siteName || "");
-
+  const mid = C.subtle(state.article.siteName || "");
   const right = C.subtle(`${pct}% `) +
-    C.green("●") + C.subtle(` ln ${topLine + 1}/${totalLines} `);
+    C.green("●") + C.subtle(` ln ${state.topLine + 1}/${state.lines.length} `);
 
-  const nav = searching
+  const nav = loadingMessage
+    ? C.subtle(" please wait")
+    : state.openingLink
+    ? C.muted(" digits") + C.subtle(":number ") +
+      C.muted("enter") + C.subtle(":open ") +
+      C.muted("esc") + C.subtle(":cancel ") +
+      (hasHistory ? C.muted("h") + C.subtle(":back ") : "") +
+      C.muted("q") + C.subtle(":quit")
+    : state.searching
     ? C.muted(" enter") + C.subtle(":search ") + C.muted("esc") + C.subtle(":cancel ")
-    : C.muted(" j/k") + C.subtle(":scroll ") +
-      C.muted("d/u") + C.subtle(":page ") +
-      C.muted("/") + C.subtle(":search ") +
-      (hasLinks ? C.muted("e") + C.subtle(":links ") : "") +
-      C.muted("o") + C.subtle(":open ") +
-      C.muted("q") + C.subtle(":quit");
+    : normalNav(articleHasLinks, hasHistory);
 
   const leftStr  = stripAnsi(left);
   const midStr   = stripAnsi(mid);
@@ -76,8 +170,8 @@ function renderStatusBar(
   const rightPad = spaces - leftPad - Math.floor(spaces / 3);
 
   process.stdout.write(
-    "\x1b[" + (getTermSize().rows) + ";1H" + // move to last row
-    "\x1b[48;2;42;43;47m" +                   // bg #2a2b2f
+    "\x1b[" + getTermSize().rows + ";1H" +
+    "\x1b[48;2;42;43;47m" +
     left +
     " ".repeat(leftPad) +
     mid +
@@ -134,12 +228,6 @@ function highlightMatchRange(line: string, start: number, end: number): string {
   return out;
 }
 
-interface MatchPos {
-  line: number;
-  start: number;
-  end: number;
-}
-
 function findMatches(lines: string[], term: string): MatchPos[] {
   if (!term) return [];
   const out: MatchPos[] = [];
@@ -161,11 +249,41 @@ function findMatches(lines: string[], term: string): MatchPos[] {
 function findNextMatchIndex(matches: MatchPos[], fromLine: number, fromStart: number): number {
   if (!matches.length) return -1;
   for (let i = 0; i < matches.length; i++) {
-    const m = matches[i];
-    if (m.line > fromLine) return i;
-    if (m.line === fromLine && m.start > fromStart) return i;
+    const match = matches[i];
+    if (match.line > fromLine) return i;
+    if (match.line === fromLine && match.start > fromStart) return i;
   }
-  return 0; // wrap
+  return 0;
+}
+
+function clearSearch(state: PagerState) {
+  state.searching = false;
+  state.searchTerm = "";
+  state.highlightLine = -1;
+  state.highlightRange = null;
+  state.matchIdx = 0;
+  state.matchTotal = 0;
+  state.matchPos = -1;
+  state.matches = [];
+}
+
+function refreshSearch(state: PagerState) {
+  state.matches = findMatches(state.lines, state.searchTerm);
+  state.matchTotal = state.matches.length;
+  if (state.matchTotal > 0) {
+    const fromLine = state.highlightLine >= 0 ? state.highlightLine : state.topLine - 1;
+    const fromStart = state.highlightRange ? state.highlightRange.start : -1;
+    state.matchPos = findNextMatchIndex(state.matches, fromLine, fromStart);
+    const match = state.matches[state.matchPos];
+    state.highlightLine = match.line;
+    state.highlightRange = { start: match.start, end: match.end };
+    state.matchIdx = state.matchPos + 1;
+  } else {
+    state.matchPos = -1;
+    state.matchIdx = 0;
+    state.highlightLine = -1;
+    state.highlightRange = null;
+  }
 }
 
 function clearScreen() {
@@ -178,36 +296,28 @@ function enterAltScreen() { process.stdout.write("\x1b[?1049h"); }
 function exitAltScreen() { process.stdout.write("\x1b[?1049l"); }
 
 function renderPage(
-  lines: string[],
-  topLine: number,
-  article: Article,
-  searching: boolean,
-  searchTerm: string,
-  highlightLine: number,
-  highlightRange: { start: number; end: number } | null,
-  hasLinks: boolean,
-  linksExpanded: boolean,
-  matchIdx: number,
-  matchTotal: number
+  state: PagerState,
+  loadingMessage: string | null,
+  historyDepth: number
 ) {
   const { rows } = getTermSize();
   const viewHeight = rows - 1;
   clearScreen();
 
-  const visible = lines.slice(topLine, topLine + viewHeight);
+  const visible = state.lines.slice(state.topLine, state.topLine + viewHeight);
   for (let i = 0; i < viewHeight; i++) {
-    const l = visible[i] ?? "";
-    const absLine = topLine + i;
+    const line = visible[i] ?? "";
+    const absLine = state.topLine + i;
 
-    if (highlightLine === absLine && searchTerm && highlightRange) {
-      const highlighted = highlightMatchRange(l, highlightRange.start, highlightRange.end);
+    if (state.highlightLine === absLine && state.searchTerm && state.highlightRange) {
+      const highlighted = highlightMatchRange(line, state.highlightRange.start, state.highlightRange.end);
       process.stdout.write(highlighted + "\n");
     } else {
-      process.stdout.write(l + "\n");
+      process.stdout.write(line + "\n");
     }
   }
 
-  renderStatusBar(article, topLine, lines.length, searching, searchTerm, hasLinks, linksExpanded, matchIdx, matchTotal);
+  renderStatusBar(state, loadingMessage, historyDepth);
 }
 
 function escapeRe(s: string) {
@@ -216,89 +326,166 @@ function escapeRe(s: string) {
 
 export async function startPager(
   rendered: RenderedArticle,
-  article: Article
+  article: Article,
+  opts: { noColor?: boolean } = {}
 ): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stdout.write(rendered.plain);
     return;
   }
 
-  const { lines: initialLines } = rendered;
-  let lines = [...initialLines];
-  let topLine = 0;
-  let searching = false;
-  let searchTerm = "";
-  let highlightLine = -1;
-  let highlightRange: { start: number; end: number } | null = null;
-  let linksExpanded = false;
-  let matchIdx = 0;
-  let matchTotal = 0;
-  let matchPos = -1;
-  let matches: MatchPos[] = [];
-  const hasLinks = rendered.linksStart >= 0 && rendered.linksFull.length > 0;
+  const noColor = opts.noColor ?? false;
+  const history: PagerState[] = [];
+  let state = createPagerState(rendered, article);
+  let loadingMessage: string | null = null;
+  let loading = false;
+  let onData = (_key: string) => {};
 
-  enterAltScreen();
-  hideCursor();
+  const draw = () => {
+    const { rows } = getTermSize();
+    const viewHeight = rows - 1;
+    const maxTop = Math.max(0, state.lines.length - viewHeight);
+    state.topLine = clamp(state.topLine, 0, maxTop);
+    renderPage(state, loadingMessage, history.length);
+  };
 
   const cleanup = () => {
+    process.stdin.off("data", onData);
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
     showCursor();
     exitAltScreen();
     process.exit(0);
   };
 
+  const showFlash = (message: string) => {
+    state.flashMessage = message;
+  };
+
+  const openLink = async (index: number) => {
+    const link = state.article.links[index];
+    if (!link) {
+      showFlash(`link ${index + 1} not found`);
+      return;
+    }
+
+    const previous = cloneState(state);
+    state.openingLink = false;
+    state.linkInput = "";
+    state.flashMessage = null;
+    loading = true;
+    loadingMessage = `[${index + 1}] ${link.host}`;
+    draw();
+
+    try {
+      const nextArticle = await fetchArticle(link.url, { quiet: true });
+      const nextRendered = renderArticle(nextArticle, { noColor });
+      history.push(previous);
+      state = createPagerState(nextRendered, nextArticle);
+    } catch (err: any) {
+      showFlash(err instanceof Error ? err.message : "could not open link");
+    } finally {
+      loading = false;
+      loadingMessage = null;
+      draw();
+    }
+  };
+
+  enterAltScreen();
+  hideCursor();
+
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
+  draw();
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.setEncoding("utf8");
 
-  const { rows } = getTermSize();
-  const viewHeight = rows - 1;
-  const maxTop = Math.max(0, lines.length - viewHeight);
+  onData = (key: string) => {
+    void handleKey(key);
+  };
 
-  process.stdin.on("data", (key: string) => {
+  async function handleKey(key: string): Promise<void> {
+    if (loading) {
+      if (key === "q" || key === "Q") cleanup();
+      return;
+    }
+
     const { rows } = getTermSize();
-    const viewH = rows - 1;
-    const maxT = Math.max(0, lines.length - viewH);
+    const viewHeight = rows - 1;
+    const maxTop = Math.max(0, state.lines.length - viewHeight);
 
-    if (searching) {
+    if (!state.searching && !state.openingLink) {
+      state.flashMessage = null;
+    }
+
+    if (state.searching) {
       if (key === "\r" || key === "\n") {
-        // confirm search
-        matches = findMatches(lines, searchTerm);
-        matchTotal = matches.length;
-        if (matchTotal > 0) {
-          matchPos = findNextMatchIndex(matches, topLine - 1, -1);
-          const m = matches[matchPos];
-          highlightLine = m.line;
-          highlightRange = { start: m.start, end: m.end };
-          matchIdx = matchPos + 1;
-          topLine = clamp(m.line, 0, maxT);
+        state.matches = findMatches(state.lines, state.searchTerm);
+        state.matchTotal = state.matches.length;
+        if (state.matchTotal > 0) {
+          state.matchPos = findNextMatchIndex(state.matches, state.topLine - 1, -1);
+          const match = state.matches[state.matchPos];
+          state.highlightLine = match.line;
+          state.highlightRange = { start: match.start, end: match.end };
+          state.matchIdx = state.matchPos + 1;
+          state.topLine = clamp(match.line, 0, maxTop);
         } else {
-          matchPos = -1;
-          matchIdx = 0;
-          highlightLine = -1;
-          highlightRange = null;
+          state.matchPos = -1;
+          state.matchIdx = 0;
+          state.highlightLine = -1;
+          state.highlightRange = null;
         }
-        searching = false;
+        state.searching = false;
       } else if (key === "\x1b" || key === "\x03") {
-        searching = false;
-        searchTerm = "";
-        highlightLine = -1;
-        highlightRange = null;
-        matchIdx = 0;
-        matchTotal = 0;
-        matchPos = -1;
-        matches = [];
+        clearSearch(state);
       } else if (key === "\x7f") {
-        searchTerm = searchTerm.slice(0, -1);
+        state.searchTerm = state.searchTerm.slice(0, -1);
       } else if (key.charCodeAt(0) >= 32) {
-        searchTerm += key;
+        state.searchTerm += key;
       }
 
-      renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
+      draw();
+      return;
+    }
+
+    if (state.openingLink) {
+      if (key === "\r" || key === "\n") {
+        if (!state.linkInput) {
+          showFlash("enter a link number");
+          draw();
+          return;
+        }
+        const linkIdx = parseInt(state.linkInput, 10) - 1;
+        await openLink(linkIdx);
+        return;
+      }
+      if (key === "\x1b" || key === "\x03") {
+        state.openingLink = false;
+        state.linkInput = "";
+        draw();
+        return;
+      }
+      if (key === "h") {
+        if (!history.length) {
+          showFlash("no previous article");
+        } else {
+          state = history.pop() as PagerState;
+        }
+        draw();
+        return;
+      }
+      if (key === "\x7f") {
+        state.linkInput = state.linkInput.slice(0, -1);
+        draw();
+        return;
+      }
+      if (/^\d$/.test(key)) {
+        state.linkInput += key;
+        draw();
+      }
       return;
     }
 
@@ -307,129 +494,101 @@ export async function startPager(
       case "Q":
       case "\x03":
         cleanup();
-        break;
+        return;
 
-      // scroll down
       case "j":
-      case "\x1b[B": // arrow down
-        topLine = clamp(topLine + 1, 0, maxT);
+      case "\x1b[B":
+        state.topLine = clamp(state.topLine + 1, 0, maxTop);
         break;
 
-      // scroll up
       case "k":
-      case "\x1b[A": // arrow up
-        topLine = clamp(topLine - 1, 0, maxT);
+      case "\x1b[A":
+        state.topLine = clamp(state.topLine - 1, 0, maxTop);
         break;
 
-      // half page down
       case "d":
-        topLine = clamp(topLine + Math.floor(viewH / 2), 0, maxT);
+        state.topLine = clamp(state.topLine + Math.floor(viewHeight / 2), 0, maxTop);
         break;
 
-      // half page up
       case "u":
-        topLine = clamp(topLine - Math.floor(viewH / 2), 0, maxT);
+        state.topLine = clamp(state.topLine - Math.floor(viewHeight / 2), 0, maxTop);
         break;
 
-      // full page down
       case " ":
       case "f":
-        topLine = clamp(topLine + viewH, 0, maxT);
+        state.topLine = clamp(state.topLine + viewHeight, 0, maxTop);
         break;
 
-      // full page up
       case "b":
-        topLine = clamp(topLine - viewH, 0, maxT);
+        state.topLine = clamp(state.topLine - viewHeight, 0, maxTop);
         break;
 
-      // go to top
       case "g":
-        topLine = 0;
+        state.topLine = 0;
         break;
 
-      // go to bottom
       case "G":
-        topLine = maxT;
+        state.topLine = maxTop;
         break;
 
-      // search
       case "/":
-        searching = true;
-        searchTerm = "";
-        matchIdx = 0;
-        matchTotal = 0;
-        matchPos = -1;
-        matches = [];
-        highlightLine = -1;
-        highlightRange = null;
+        state.searching = true;
+        state.searchTerm = "";
+        state.matchIdx = 0;
+        state.matchTotal = 0;
+        state.matchPos = -1;
+        state.matches = [];
+        state.highlightLine = -1;
+        state.highlightRange = null;
         break;
 
-      // next search result
       case "n":
-        if (searchTerm && matches.length) {
-          matchPos = (matchPos + 1) % matches.length;
-          const m = matches[matchPos];
-          highlightLine = m.line;
-          highlightRange = { start: m.start, end: m.end };
-          matchIdx = matchPos + 1;
-          topLine = clamp(m.line, 0, maxT);
+        if (state.searchTerm && state.matches.length) {
+          state.matchPos = (state.matchPos + 1) % state.matches.length;
+          const match = state.matches[state.matchPos];
+          state.highlightLine = match.line;
+          state.highlightRange = { start: match.start, end: match.end };
+          state.matchIdx = state.matchPos + 1;
+          state.topLine = clamp(match.line, 0, maxTop);
         }
         break;
 
-      // open in browser
-      case "o": {
-        const opener =
-          process.platform === "darwin"
-            ? "open"
-            : process.platform === "win32"
-            ? "start"
-            : "xdg-open";
-        Bun.spawn([opener, article.url]);
+      case "o":
+        if (!hasLinks(state.rendered)) {
+          showFlash("no links in this article");
+        } else {
+          state.openingLink = true;
+          state.linkInput = "";
+        }
         break;
-      }
 
-      // resize
+      case "h":
+        if (!history.length) {
+          showFlash("no previous article");
+        } else {
+          state = history.pop() as PagerState;
+        }
+        break;
+
       case "\x1b[8~":
         break;
 
-      // expand/collapse links
       case "e":
-        if (rendered.linksStart >= 0 && rendered.linksFull.length > 0) {
-          linksExpanded = !linksExpanded;
-          const newLinkLines = linksExpanded ? rendered.linksFull : rendered.linksCollapsed;
-          const oldLinkLines = linksExpanded ? rendered.linksCollapsed : rendered.linksFull;
-          const afterLinks = rendered.linksStart + oldLinkLines.length;
-          lines = [
-            ...lines.slice(0, rendered.linksStart),
-            ...newLinkLines,
-            ...lines.slice(afterLinks),
-          ];
-          if (searchTerm) {
-            matches = findMatches(lines, searchTerm);
-            matchTotal = matches.length;
-            if (matchTotal > 0) {
-              const fromLine = highlightLine >= 0 ? highlightLine : topLine - 1;
-              const fromStart = highlightRange ? highlightRange.start : -1;
-              matchPos = findNextMatchIndex(matches, fromLine, fromStart);
-              const m = matches[matchPos];
-              highlightLine = m.line;
-              highlightRange = { start: m.start, end: m.end };
-              matchIdx = matchPos + 1;
-            } else {
-              matchPos = -1;
-              matchIdx = 0;
-              highlightLine = -1;
-              highlightRange = null;
-            }
+        if (hasLinks(state.rendered)) {
+          state.linksExpanded = !state.linksExpanded;
+          state.lines = buildLines(state.rendered, state.linksExpanded);
+          if (state.searchTerm) {
+            refreshSearch(state);
           }
         }
         break;
     }
 
-    renderPage(lines, topLine, article, searching, searchTerm, highlightLine, highlightRange, hasLinks, linksExpanded, matchIdx, matchTotal);
-  });
+    draw();
+  }
 
-  // keep alive
+  process.stdin.on("data", onData);
+
   await new Promise<void>((resolve) => {
     process.stdin.once("end", resolve);
   });

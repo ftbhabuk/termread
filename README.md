@@ -83,13 +83,16 @@ termread https://example.com/article --raw | wc -w
 | `g` | go to top |
 | `G` | go to bottom |
 | `/` | search |
-| `Enter` | jump to next match |
+| `Enter` | confirm search / open selected link |
 | `Esc` | cancel search |
 | `Backspace` | delete search char |
 | `n` | next search result |
 | `e` | expand/collapse links |
-| `o` | open in browser |
+| `o` | open a link by number |
+| `h` | go back to previous article |
 | `q` | quit |
+
+Press `o`, type a link number from the Links section, then press `Enter` to open it inside `termread`.
 
 ---
 

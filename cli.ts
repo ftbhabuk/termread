@@ -58,7 +58,7 @@ if (flags.help) {
     if (flags.raw) {
       console.log(rendered.plain);
     } else {
-      await startPager(rendered, article);
+      await startPager(rendered, article, { noColor: flags.noColor });
     }
   } catch (err: any) {
     console.error(`\n  error: ${err.message}\n`);
