@@ -11,8 +11,20 @@ export interface RenderedArticle {
   linksCollapsed: string[]; // collapsed link lines (first 5 + hint)
 }
 
-const TERM_WIDTH = Math.min(process.stdout.columns || 80, 88);
-const CONTENT_WIDTH = TERM_WIDTH - 4; // 2 char left pad
+interface RenderViewport {
+  cols: number;
+  rows: number;
+}
+
+interface RenderLayout {
+  cols: number;
+  rows: number;
+  columnWidth: number;
+  contentWidth: number;
+  outerPad: number;
+  baseIndent: number;
+  pageHeight: number;
+}
 
 // ─── Catppuccin Mocha palette ────────────────────────────────────────────────
 const C = {
@@ -91,6 +103,12 @@ function smartenInline(text: string): string {
       .map((seg) => (seg.startsWith("http") ? seg : smartenText(seg)))
       .join("");
   }).join("");
+}
+
+interface InlineSpan {
+  text: string;
+  kind: "plain" | "link" | "url" | "code" | "bold" | "italic" | "boldItalic" | "strike" | "muted";
+  href?: string;
 }
 
 function wrap(text: string, width: number): string[] {
@@ -174,8 +192,197 @@ function applyBaseStyle(text: string, style: (s: string) => string): string {
   return open + text.replace(resetRe, (m) => m + open) + close;
 }
 
+function styleSpanText(text: string, noColor: boolean): string {
+  return typographicStyle(text, noColor);
+}
+
+function parseInline(text: string): InlineSpan[] {
+  const spans: InlineSpan[] = [];
+  const re = /\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|~~(.+?)~~|\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|(https?:\/\/\S+)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    const idx = match.index ?? 0;
+    if (idx > last) {
+      spans.push({ text: text.slice(last, idx), kind: "plain" });
+    }
+
+    if (match[1] && match[2]) {
+      let host = match[2];
+      try { host = new URL(match[2]).hostname; } catch { /* keep raw */ }
+      spans.push({ text: match[1], kind: "link", href: match[2] });
+      spans.push({ text: ` (${host})`, kind: "muted" });
+    } else if (match[3]) {
+      spans.push({ text: match[3], kind: "code" });
+    } else if (match[4]) {
+      spans.push({ text: match[4], kind: "strike" });
+    } else if (match[5]) {
+      spans.push({ text: match[5], kind: "boldItalic" });
+    } else if (match[6]) {
+      spans.push({ text: match[6], kind: "bold" });
+    } else if (match[7]) {
+      spans.push({ text: match[7], kind: "italic" });
+    } else if (match[8]) {
+      spans.push({ text: match[8], kind: "url", href: match[8] });
+    }
+
+    last = idx + match[0].length;
+  }
+
+  if (last < text.length) {
+    spans.push({ text: text.slice(last), kind: "plain" });
+  }
+
+  return spans;
+}
+
+function splitSpanWords(span: InlineSpan): InlineSpan[] {
+  const parts = span.text.match(/\s+|[^\s]+/g) ?? [span.text];
+  return parts
+    .filter((part) => part.length > 0)
+    .map((part) => ({ ...span, text: part }));
+}
+
+function splitSpanChunk(span: InlineSpan, width: number): InlineSpan[] {
+  if (width <= 0) return [{ ...span }];
+  const out: InlineSpan[] = [];
+  for (let i = 0; i < span.text.length; i += width) {
+    out.push({ ...span, text: span.text.slice(i, i + width) });
+  }
+  return out.length ? out : [{ ...span }];
+}
+
+function wrapInline(spans: InlineSpan[], width: number): InlineSpan[][] {
+  if (width <= 0) {
+    return spans.length ? [spans.map((span) => ({ ...span }))] : [[]];
+  }
+
+  const tokens = spans.flatMap(splitSpanWords);
+  const lines: InlineSpan[][] = [];
+  let line: InlineSpan[] = [];
+  let lineWidth = 0;
+
+  const pushLine = () => {
+    lines.push(line);
+    line = [];
+    lineWidth = 0;
+  };
+
+  const appendToken = (token: InlineSpan) => {
+    const tokenWidth = token.text.length;
+    if (/^\s+$/.test(token.text) && lineWidth === 0) return;
+
+    if (tokenWidth > width && !/^\s+$/.test(token.text)) {
+      if (lineWidth > 0) pushLine();
+      const chunks = splitSpanChunk(token, width);
+      for (let i = 0; i < chunks.length; i++) {
+        line.push(chunks[i]);
+        lineWidth += chunks[i].text.length;
+        if (i < chunks.length - 1) pushLine();
+      }
+      return;
+    }
+
+    if (lineWidth + tokenWidth > width) {
+      if (lineWidth > 0) pushLine();
+      if (/^\s+$/.test(token.text)) return;
+    }
+
+    line.push(token);
+    lineWidth += tokenWidth;
+  };
+
+  for (const token of tokens) {
+    appendToken(token);
+  }
+
+  if (line.length || !lines.length) {
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+function renderInlineSpan(span: InlineSpan, noColor: boolean): string {
+  if (noColor) return styleSpanText(span.text, true);
+
+  switch (span.kind) {
+    case "plain":
+      return styleSpanText(span.text, false);
+    case "muted":
+      return C.muted(styleSpanText(span.text, false));
+    case "link":
+    case "url":
+      return osc8(span.href || span.text, C.cyan.underline(span.text));
+    case "code":
+      return C.subtle("`") + C.code(span.text) + C.subtle("`");
+    case "bold":
+      return C.white.bold(styleSpanText(span.text, false));
+    case "italic":
+      return C.white.italic(styleSpanText(span.text, false));
+    case "boldItalic":
+      return C.white.bold.italic(styleSpanText(span.text, false));
+    case "strike":
+      return C.red.strikethrough(styleSpanText(span.text, false));
+  }
+}
+
+function mergeInlineSpans(spans: InlineSpan[]): InlineSpan[] {
+  const merged: InlineSpan[] = [];
+
+  for (const span of spans) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.kind === span.kind && prev.href === span.href) {
+      prev.text += span.text;
+    } else {
+      merged.push({ ...span });
+    }
+  }
+
+  return merged;
+}
+
+function renderInlineLine(spans: InlineSpan[], noColor: boolean): string {
+  return mergeInlineSpans(spans)
+    .map((span) => renderInlineSpan(span, noColor))
+    .join("");
+}
+
+function renderWrappedInline(text: string, width: number, noColor: boolean): string[] {
+  const spans = parseInline(text);
+  const lines = wrapInline(spans, width);
+  return lines.map((line) => renderInlineLine(line, noColor));
+}
+
 function pad(n: number): string {
   return " ".repeat(n);
+}
+
+function getViewport(viewport: Partial<RenderViewport> = {}): RenderViewport {
+  return {
+    cols: viewport.cols ?? process.stdout.columns ?? 80,
+    rows: viewport.rows ?? process.stdout.rows ?? 40,
+  };
+}
+
+function getLayout(viewport: Partial<RenderViewport> = {}): RenderLayout {
+  const { cols, rows } = getViewport(viewport);
+  const columnWidth = Math.min(cols, 88);
+  const outerPad = Math.max(0, Math.floor((cols - columnWidth) / 2));
+  return {
+    cols,
+    rows,
+    columnWidth,
+    contentWidth: columnWidth - 4,
+    outerPad,
+    baseIndent: outerPad + 2,
+    pageHeight: rows - 5,
+  };
+}
+
+function indent(layout: RenderLayout, extra: number = 0): string {
+  return pad(layout.baseIndent + extra);
 }
 
 function compactNum(n: number): string {
@@ -183,8 +390,8 @@ function compactNum(n: number): string {
   return n.toString();
 }
 
-function hr(): string {
-  return C.subtle("─".repeat(CONTENT_WIDTH));
+function hr(layout: RenderLayout): string {
+  return C.subtle("─".repeat(layout.contentWidth));
 }
 
 function wrapCode(text: string, width: number): string[] {
@@ -196,7 +403,7 @@ function wrapCode(text: string, width: number): string[] {
   return out.length ? out : [""];
 }
 
-function renderMarkdown(md: string, noColor: boolean): string[] {
+function renderMarkdown(md: string, noColor: boolean, layout: RenderLayout): string[] {
   const lines: string[] = [];
   const rawLines = md.split("\n");
 
@@ -218,15 +425,15 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
         inCode = false;
         const lang = codeLang;
         lines.push("");
-        lines.push(pad(2) + C.subtle("┌─ ") + C.muted(lang || "code") + C.subtle(" " + "─".repeat(Math.max(0, CONTENT_WIDTH - 4 - (lang || "code").length))));
+        lines.push(indent(layout) + C.subtle("┌─ ") + C.muted(lang || "code") + C.subtle(" " + "─".repeat(Math.max(0, layout.contentWidth - 4 - (lang || "code").length))));
         for (const cl of codeBuffer) {
-          const wrapped = wrapCode(cl, CONTENT_WIDTH - 4);
+          const wrapped = wrapCode(cl, layout.contentWidth - 4);
           for (const wl of wrapped) {
-            const padded = wl.padEnd(CONTENT_WIDTH - 4, " ");
-            lines.push(pad(2) + C.subtle("│ ") + C.codeBlock(padded));
+            const padded = wl.padEnd(layout.contentWidth - 4, " ");
+            lines.push(indent(layout) + C.subtle("│ ") + C.codeBlock(padded));
           }
         }
-        lines.push(pad(2) + C.subtle("└" + "─".repeat(CONTENT_WIDTH - 2)));
+        lines.push(indent(layout) + C.subtle("└" + "─".repeat(layout.contentWidth - 2)));
         lines.push("");
       }
       continue;
@@ -241,10 +448,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("###### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(7));
-      const styled = styleInline(text, noColor);
-      for (const l of wrap(styled, CONTENT_WIDTH)) {
+      const wrapped = renderWrappedInline(text, layout.contentWidth, noColor);
+      for (const l of wrapped) {
         const colored = noColor ? l : applyBaseStyle(l, C.yellow.bold);
-        lines.push(pad(2) + colored);
+        lines.push(indent(layout) + colored);
       }
       lines.push("");
       continue;
@@ -252,10 +459,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("##### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(6));
-      const styled = styleInline(text, noColor);
-      for (const l of wrap(styled, CONTENT_WIDTH)) {
+      const wrapped = renderWrappedInline(text, layout.contentWidth, noColor);
+      for (const l of wrapped) {
         const colored = noColor ? l : applyBaseStyle(l, C.cyan.bold);
-        lines.push(pad(2) + colored);
+        lines.push(indent(layout) + colored);
       }
       lines.push("");
       continue;
@@ -263,10 +470,10 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("#### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(5));
-      const styled = styleInline(text, noColor);
-      for (const l of wrap(styled, CONTENT_WIDTH)) {
+      const wrapped = renderWrappedInline(text, layout.contentWidth, noColor);
+      for (const l of wrapped) {
         const colored = noColor ? l : applyBaseStyle(l, C.green.bold);
-        lines.push(pad(2) + colored);
+        lines.push(indent(layout) + colored);
       }
       lines.push("");
       continue;
@@ -274,15 +481,14 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("### ")) {
       lines.push("");
       const text = smartenInline(raw.slice(4));
-      const styled = styleInline(text, noColor);
-      const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+      const wrapped = renderWrappedInline(text, layout.contentWidth - 4, noColor);
       const prefix = noColor ? "### " : C.cyan.bold("### ");
       const first = wrapped[0] || "";
       const firstColored = noColor ? first : applyBaseStyle(first, C.cyan.bold);
-      lines.push(pad(2) + prefix + firstColored);
+      lines.push(indent(layout) + prefix + firstColored);
       for (let j = 1; j < wrapped.length; j++) {
         const colored = noColor ? wrapped[j] : applyBaseStyle(wrapped[j], C.cyan.bold);
-        lines.push(pad(6) + colored);
+        lines.push(indent(layout, 4) + colored);
       }
       lines.push("");
       continue;
@@ -290,29 +496,27 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     if (raw.startsWith("## ")) {
       lines.push("");
       const text = smartenInline(raw.slice(3));
-      const styled = styleInline(text, noColor);
-      const wrapped = wrap(styled, CONTENT_WIDTH - 4);
+      const wrapped = renderWrappedInline(text, layout.contentWidth - 4, noColor);
       const prefix = noColor ? "## " : C.blue.bold("## ");
       const first = wrapped[0] || "";
       const firstColored = noColor ? first : applyBaseStyle(first, C.blue.bold);
-      lines.push(pad(2) + prefix + firstColored);
+      lines.push(indent(layout) + prefix + firstColored);
       for (let j = 1; j < wrapped.length; j++) {
         const colored = noColor ? wrapped[j] : applyBaseStyle(wrapped[j], C.blue.bold);
-        lines.push(pad(6) + colored);
+        lines.push(indent(layout, 4) + colored);
       }
-      const underlineLen = Math.min(CONTENT_WIDTH, stripAnsi(first || text).length + 3);
-      lines.push(pad(2) + (noColor ? "─".repeat(underlineLen) : C.subtle("─".repeat(underlineLen))));
+      const underlineLen = Math.min(layout.contentWidth, stripAnsi(first || text).length + 3);
+      lines.push(indent(layout) + (noColor ? "─".repeat(underlineLen) : C.subtle("─".repeat(underlineLen))));
       lines.push("");
       continue;
     }
     if (raw.startsWith("# ")) {
       lines.push("");
       const text = smartenInline(raw.slice(2));
-      const styled = styleInline(text, noColor);
-      const wrapped = wrap(styled, CONTENT_WIDTH);
+      const wrapped = renderWrappedInline(text, layout.contentWidth, noColor);
       for (const l of wrapped) {
         const colored = noColor ? l : applyBaseStyle(l, C.purple.bold);
-        lines.push(pad(2) + colored);
+        lines.push(indent(layout) + colored);
       }
       lines.push("");
       continue;
@@ -327,25 +531,24 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
       }
       i--;
       lines.push("");
-      const innerWidth = CONTENT_WIDTH - 4;
+      const innerWidth = layout.contentWidth - 4;
       const frameLeft = noColor ? "│ " : C.green("│ ");
       const frameRight = noColor ? " │" : C.green(" │");
       for (const ql of quoteLines) {
         if (!ql.trim()) {
           const blank = pad(innerWidth);
           const coloredBlank = noColor ? blank : applyBaseStyle(blank, C.muted);
-          lines.push(pad(2) + frameLeft + coloredBlank + frameRight);
+          lines.push(indent(layout) + frameLeft + coloredBlank + frameRight);
           continue;
         }
         const smartened = smartenInline(ql);
-        const styled = styleInline(smartened, noColor);
-        const wrapped = wrap(styled, innerWidth);
+        const wrapped = renderWrappedInline(smartened, innerWidth, noColor);
         for (const wl of wrapped) {
           const visLen = stripAnsi(wl).length;
           const padding = " ".repeat(Math.max(0, innerWidth - visLen));
           const content = wl + padding;
           const colored = noColor ? content : applyBaseStyle(content, C.muted);
-          lines.push(pad(2) + frameLeft + colored + frameRight);
+          lines.push(indent(layout) + frameLeft + colored + frameRight);
         }
       }
       lines.push("");
@@ -355,20 +558,20 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     // horizontal rule
     if (/^---+$/.test(raw.trim()) || /^\*\*\*+$/.test(raw.trim())) {
       lines.push("");
-      lines.push(pad(2) + hr());
+      lines.push(indent(layout) + hr(layout));
       lines.push("");
       continue;
     }
 
     // unordered list
     if (/^\s*[-*+] /.test(raw)) {
-      const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
+      const listIndent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
       const text = raw.replace(/^\s*[-*+] /, "");
-      const styled = styleInline(smartenInline(text), noColor);
-      const firstPrefix = pad(2 + indent) + C.yellow("•") + " ";
+      const bullet = noColor ? "•" : C.yellow("•");
       const bulletWidth = 2; // bullet + space
-      const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth);
-      const extra = pad(2 + indent + bulletWidth);
+      const wrapped = renderWrappedInline(smartenInline(text), layout.contentWidth - listIndent - bulletWidth, noColor);
+      const firstPrefix = indent(layout, listIndent) + bullet + " ";
+      const extra = indent(layout, listIndent + bulletWidth);
       lines.push(firstPrefix + (wrapped[0] || ""));
       for (let j = 1; j < wrapped.length; j++) {
         lines.push(extra + wrapped[j]);
@@ -378,16 +581,16 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
 
     // ordered list
     if (/^\s*\d+\. /.test(raw)) {
-      const indent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
+      const listIndent = raw.match(/^(\s*)/)?.[1]?.length ?? 0;
       const num = raw.match(/^\s*(\d+)\./)?.[1] ?? "1";
       const text = raw.replace(/^\s*\d+\. /, "");
-      const styled = styleInline(smartenInline(text), noColor);
       const bullet = `${num}.`;
+      const bulletLabel = noColor ? bullet : C.yellow(bullet);
       const bulletWidth = stripAnsi(bullet).length;
-      const wrapped = wrap(styled, CONTENT_WIDTH - indent - bulletWidth - 1);
-      lines.push(pad(2 + indent) + C.yellow(bullet) + " " + (wrapped[0] || ""));
+      const wrapped = renderWrappedInline(smartenInline(text), layout.contentWidth - listIndent - bulletWidth - 1, noColor);
+      lines.push(indent(layout, listIndent) + bulletLabel + " " + (wrapped[0] || ""));
       for (let j = 1; j < wrapped.length; j++) {
-        lines.push(pad(2 + indent + bulletWidth + 1) + wrapped[j]);
+        lines.push(indent(layout, listIndent + bulletWidth + 1) + wrapped[j]);
       }
       continue;
     }
@@ -399,72 +602,22 @@ function renderMarkdown(md: string, noColor: boolean): string[] {
     }
 
     // normal paragraph
-    const styled = styleInline(smartenInline(raw), noColor);
+    const inlineText = smartenInline(raw);
     if (firstParagraph) {
-      const wrapped = wrap(styled, CONTENT_WIDTH - 2);
+      const wrapped = renderWrappedInline(inlineText, layout.contentWidth - 2, noColor);
       for (let j = 0; j < wrapped.length; j++) {
-        lines.push(pad(2) + (j === 0 ? "    " : "") + wrapped[j]);
+        lines.push(indent(layout) + (j === 0 ? "    " : "") + wrapped[j]);
       }
       firstParagraph = false;
     } else {
-      const wrapped = wrap(styled, CONTENT_WIDTH);
+      const wrapped = renderWrappedInline(inlineText, layout.contentWidth, noColor);
       for (const l of wrapped) {
-        lines.push(pad(2) + l);
+        lines.push(indent(layout) + l);
       }
     }
   }
 
   return lines;
-}
-
-function styleInline(text: string, noColor: boolean): string {
-  if (noColor) {
-    return text
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
-      .replace(/`([^`]+)`/g, "$1")
-      .replace(/~~(.+?)~~/g, "$1")
-      .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
-      .replace(/\*\*(.+?)\*\*/g, "$1")
-      .replace(/\*(.+?)\*/g, "$1")
-      .replace(/—/g, "--")
-      .replace(/…/g, "...")
-      .replace(/[""]/g, "\"")
-      .replace(/['']/g, "'")
-      .replace(/[*_]/g, "");
-  }
-
-  // Phase 1: extract markdown links, replace with numbered placeholders
-  interface LinkInfo { url: string; label: string; host: string }
-  const linkInfos: LinkInfo[] = [];
-  const withPlaceholders = text.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    (_match: string, label: string, url: string) => {
-      let host = url;
-      try { host = new URL(url).hostname; } catch { /* keep raw */ }
-      linkInfos.push({ url, label, host });
-      return "@@" + (linkInfos.length - 1) + "@@";
-    }
-  );
-
-  // Phase 2: apply all inline styles + bare URL wrapping
-  const styled = withPlaceholders
-    .replace(/~~(.+?)~~/g, (_, t) => C.red.strikethrough(t))
-    .replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => C.white.bold.italic(t))
-    .replace(/\*\*(.+?)\*\*/g, (_, t) => C.white.bold(t))
-    .replace(/\*(.+?)\*/g, (_, t) => C.white.italic(t))
-    .replace(/`([^`]+)`/g, (_, t) => C.subtle("`") + C.code(t) + C.subtle("`"))
-    .replace(/https?:\/\/\S+/g, (u) => osc8(u, C.cyan.underline(u)))
-    .replace(/[*_]/g, "");
-
-  // Phase 2b: apply typographic colors
-  const withTypo = typographicStyle(styled, false);
-
-  // Phase 3: replace placeholders with styled OSC 8 links
-  return withTypo.replace(/@@(\d+)@@/g, (_match: string, idxStr: string) => {
-    const info = linkInfos[parseInt(idxStr)];
-    if (!info) return "";
-    return osc8(info.url, C.cyan.underline(info.label)) + C.muted(" (" + info.host + ")");
-  });
 }
 
 const tdService = new TurndownService({
@@ -474,16 +627,16 @@ const tdService = new TurndownService({
 });
 tdService.remove(["script", "style", "figure", "picture", "img", "iframe", "nav", "aside", "footer"]);
 
-function renderLinks(links: Link[], noColor: boolean): { full: string[]; collapsed: string[] } {
+function renderLinks(links: Link[], noColor: boolean, layout: RenderLayout): { full: string[]; collapsed: string[] } {
   if (!links.length) return { full: [], collapsed: [] };
 
   const fullLines: string[] = [];
   fullLines.push("");
-  fullLines.push(pad(2) + hr());
+  fullLines.push(indent(layout) + hr(layout));
   fullLines.push("");
   const linksTitle = noColor ? "Links" : C.yellow.bold("Links");
   const linksCount = noColor ? ` (${links.length})` : C.muted(` (${links.length})`);
-  fullLines.push(pad(2) + linksTitle + linksCount);
+  fullLines.push(indent(layout) + linksTitle + linksCount);
   fullLines.push("");
 
   // Group links by host
@@ -496,17 +649,17 @@ function renderLinks(links: Link[], noColor: boolean): { full: string[]; collaps
 
   let idx = 1;
   for (const [host, hostLinks] of byHost) {
-    fullLines.push(pad(2) + (noColor ? host : C.cyan(host)));
+    fullLines.push(indent(layout) + (noColor ? host : C.cyan(host)));
     for (const link of hostLinks) {
       const num = noColor ? `[${idx}]` : C.yellow(`[${idx}]`);
       const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
-      const wrapped = wrap(text, CONTENT_WIDTH - 10);
-      fullLines.push(pad(4) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
+      const wrapped = wrap(text, layout.contentWidth - 10);
+      fullLines.push(indent(layout, 2) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
       for (let j = 1; j < wrapped.length; j++) {
-        fullLines.push(pad(8) + wrapped[j]);
+        fullLines.push(indent(layout, 6) + wrapped[j]);
       }
       const urlLine = noColor ? link.url : osc8(link.url, C.muted.underline(link.url));
-      fullLines.push(pad(8) + urlLine);
+      fullLines.push(indent(layout, 6) + urlLine);
       idx++;
     }
     fullLines.push("");
@@ -517,27 +670,27 @@ function renderLinks(links: Link[], noColor: boolean): { full: string[]; collaps
 
   const collapsedLines: string[] = [];
   collapsedLines.push("");
-  collapsedLines.push(pad(2) + hr());
+  collapsedLines.push(indent(layout) + hr(layout));
   collapsedLines.push("");
-  collapsedLines.push(pad(2) + linksTitle + linksCount);
+  collapsedLines.push(indent(layout) + linksTitle + linksCount);
   collapsedLines.push("");
 
   idx = 1;
   let shown = 0;
   for (const [host, hostLinks] of byHost) {
     if (shown >= 5) break;
-    collapsedLines.push(pad(2) + (noColor ? host : C.cyan(host)));
+    collapsedLines.push(indent(layout) + (noColor ? host : C.cyan(host)));
     for (const link of hostLinks) {
       if (shown >= 5) break;
       const num = noColor ? `[${idx}]` : C.yellow(`[${idx}]`);
       const text = link.text.length > 60 ? link.text.slice(0, 57) + "..." : link.text;
-      const wrapped = wrap(text, CONTENT_WIDTH - 10);
-      collapsedLines.push(pad(4) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
+      const wrapped = wrap(text, layout.contentWidth - 10);
+      collapsedLines.push(indent(layout, 2) + num + " " + (noColor ? (wrapped[0] || "") : C.white(wrapped[0] || "")));
       for (let j = 1; j < wrapped.length; j++) {
-        collapsedLines.push(pad(8) + wrapped[j]);
+        collapsedLines.push(indent(layout, 6) + wrapped[j]);
       }
       const urlLine = noColor ? link.url : osc8(link.url, C.muted.underline(link.url));
-      collapsedLines.push(pad(8) + urlLine);
+      collapsedLines.push(indent(layout, 6) + urlLine);
       idx++;
       shown++;
     }
@@ -546,20 +699,34 @@ function renderLinks(links: Link[], noColor: boolean): { full: string[]; collaps
 
   const remaining = links.length - shown;
   if (noColor) {
-    collapsedLines.push(pad(2) + `  ${remaining} more  ·  press e to expand`);
+    collapsedLines.push(indent(layout) + `  ${remaining} more  ·  press e to expand`);
   } else {
-    collapsedLines.push(pad(2) + C.subtle(`  ${remaining} more  ·  press `) + C.yellow("e") + C.subtle(" to expand"));
+    collapsedLines.push(indent(layout) + C.subtle(`  ${remaining} more  ·  press `) + C.yellow("e") + C.subtle(" to expand"));
   }
   collapsedLines.push("");
 
   return { full: fullLines, collapsed: collapsedLines };
 }
 
+function stripOuterPad(line: string, outerPad: number): string {
+  let trimmed = line;
+  let remaining = outerPad;
+  while (remaining > 0 && trimmed.startsWith(" ")) {
+    trimmed = trimmed.slice(1);
+    remaining--;
+  }
+  return trimmed;
+}
+
 export function renderArticle(
   article: Article,
-  opts: { noColor?: boolean } = {}
+  opts: {
+    noColor?: boolean;
+    viewport?: { cols?: number; rows?: number };
+  } = {}
 ): RenderedArticle {
   const noColor = opts.noColor ?? false;
+  const layout = getLayout(opts.viewport);
   const lines: string[] = [];
 
   // ── Top spacer
@@ -570,15 +737,15 @@ export function renderArticle(
   // ── Site name
   if (article.siteName) {
     const site = article.siteName.toUpperCase();
-    lines.push(pad(2) + accent("▍ ") + accent(site));
+    lines.push(indent(layout) + accent("▍ ") + accent(site));
     lines.push("");
   }
 
   // ── Title
-  const titleLines = wrap(smartenText(article.title), CONTENT_WIDTH);
-  lines.push(pad(2) + accent("┈".repeat(Math.min(CONTENT_WIDTH, 40))));
+  const titleLines = wrap(smartenText(article.title), layout.contentWidth);
+  lines.push(indent(layout) + accent("┈".repeat(Math.min(layout.contentWidth, 40))));
   for (const l of titleLines) {
-    lines.push(pad(2) + C.purple.bold(l));
+    lines.push(indent(layout) + C.purple.bold(l));
   }
   lines.push("");
 
@@ -591,7 +758,7 @@ export function renderArticle(
   const metaLine = noColor
     ? metaParts.map(stripAnsi).join("  ·  ")
     : metaParts.join(C.subtle("  ·  "));
-  lines.push(pad(2) + metaLine);
+  lines.push(indent(layout) + metaLine);
 
   // ── Tags
   if (article.tags.length) {
@@ -601,28 +768,28 @@ export function renderArticle(
         return C.subtle("[") + C.blue(" " + t + " ") + C.subtle("]");
       })
       .join("  ");
-    lines.push(pad(2) + tagStr);
+    lines.push(indent(layout) + tagStr);
   }
 
   lines.push("");
-  lines.push(pad(2) + hr());
+  lines.push(indent(layout) + hr(layout));
   lines.push("");
 
   // ── Body
   const cleanContent = article.content.replace(/<img\b[^>]*>/gi, "");
   const markdown = tdService.turndown(cleanContent);
-  const bodyLines = renderMarkdown(markdown, noColor);
+  const bodyLines = renderMarkdown(markdown, noColor, layout);
   for (const l of bodyLines) {
     lines.push(l);
   }
 
   // ── Article end marker
   lines.push("");
-  lines.push(pad(2) + C.subtle("╌ ╌ ╌"));
+  lines.push(indent(layout) + C.subtle("╌ ╌ ╌"));
   lines.push("");
 
   // ── Links section
-  const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links, noColor);
+  const { full: linksFull, collapsed: linksCollapsed } = renderLinks(article.links, noColor, layout);
   const linksStart = linksFull.length ? lines.length : -1;
   for (const l of linksCollapsed) {
     lines.push(l);
@@ -631,27 +798,26 @@ export function renderArticle(
   // ── Footer
   lines.push("");
   if (noColor) {
-    lines.push(pad(2) + "· · · · · · · · · ·");
+    lines.push(indent(layout) + "· · · · · · · · · ·");
   } else {
     const dots = C.text("·") + " " + C.white("·") + " " + C.muted("·") + " " + C.subtle("·") + " " + C.subtle(" ·  ·  ·  ·  ·");
-    lines.push(pad(2) + dots);
+    lines.push(indent(layout) + dots);
   }
   lines.push("");
   const sourceLabel = noColor ? "source: " : C.muted("source: ");
   const sourceUrl = noColor ? article.url : osc8(article.url, C.cyan.underline(article.url));
-  lines.push(pad(2) + sourceLabel + sourceUrl);
+  lines.push(indent(layout) + sourceLabel + sourceUrl);
   lines.push("");
 
   // ── Page breaks (every ~terminal-height lines)
-  const pageHeight = (process.stdout.rows || 40) - 5;
   const pageBreaks: number[] = [0];
-  for (let i = pageHeight; i < lines.length; i += pageHeight) {
+  for (let i = layout.pageHeight; i < lines.length; i += layout.pageHeight) {
     pageBreaks.push(i);
   }
 
   // ── Plain text version
   const plain = lines
-    .map(stripAnsi)
+    .map((line) => stripOuterPad(stripAnsi(line), layout.outerPad))
     .join("\n")
     .replace(/—/g, "--")
     .replace(/…/g, "...")

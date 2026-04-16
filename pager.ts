@@ -286,6 +286,29 @@ function refreshSearch(state: PagerState) {
   }
 }
 
+function rerenderState(state: PagerState, noColor: boolean): void {
+  state.rendered = renderArticle(state.article, {
+    noColor,
+    viewport: getTermSize(),
+  });
+  state.lines = buildLines(state.rendered, state.linksExpanded);
+
+  if (state.searchTerm) {
+    refreshSearch(state);
+  } else {
+    state.matchIdx = 0;
+    state.matchTotal = 0;
+    state.matchPos = -1;
+    state.matches = [];
+    state.highlightLine = -1;
+    state.highlightRange = null;
+  }
+
+  const viewHeight = getTermSize().rows - 1;
+  const maxTop = Math.max(0, state.lines.length - viewHeight);
+  state.topLine = clamp(state.topLine, 0, maxTop);
+}
+
 function clearScreen() {
   process.stdout.write("\x1b[2J\x1b[H");
 }
@@ -340,6 +363,11 @@ export async function startPager(
   let loadingMessage: string | null = null;
   let loading = false;
   let onData = (_key: string) => {};
+  const onResize = () => {
+    rerenderState(state, noColor);
+    draw();
+  };
+  const onExitSignal = () => cleanup();
 
   const draw = () => {
     const { rows } = getTermSize();
@@ -351,6 +379,9 @@ export async function startPager(
 
   const cleanup = () => {
     process.stdin.off("data", onData);
+    process.off("SIGWINCH", onResize);
+    process.off("SIGINT", onExitSignal);
+    process.off("SIGTERM", onExitSignal);
     process.stdin.setRawMode(false);
     process.stdin.pause();
     showCursor();
@@ -379,7 +410,10 @@ export async function startPager(
 
     try {
       const nextArticle = await fetchArticle(link.url, { quiet: true });
-      const nextRendered = renderArticle(nextArticle, { noColor });
+      const nextRendered = renderArticle(nextArticle, {
+        noColor,
+        viewport: getTermSize(),
+      });
       history.push(previous);
       state = createPagerState(nextRendered, nextArticle);
     } catch (err: any) {
@@ -394,8 +428,9 @@ export async function startPager(
   enterAltScreen();
   hideCursor();
 
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  process.on("SIGWINCH", onResize);
+  process.on("SIGINT", onExitSignal);
+  process.on("SIGTERM", onExitSignal);
 
   draw();
 
@@ -473,6 +508,7 @@ export async function startPager(
           showFlash("no previous article");
         } else {
           state = history.pop() as PagerState;
+          rerenderState(state, noColor);
         }
         draw();
         return;
@@ -567,6 +603,7 @@ export async function startPager(
           showFlash("no previous article");
         } else {
           state = history.pop() as PagerState;
+          rerenderState(state, noColor);
         }
         break;
 
