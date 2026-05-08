@@ -1,5 +1,5 @@
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { parseHTML } from "linkedom";
 
 export interface Article {
   title: string;
@@ -165,8 +165,13 @@ export async function fetchArticle(
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<link\b[^>]*rel=["']stylesheet["'][^>]*>/gi, "");
 
-  const dom = new JSDOM(cleanHtml, { url });
-  const doc = dom.window.document;
+  const { document: doc } = parseHTML(cleanHtml);
+  // Inject base URL so Readability can resolve relative links
+  if (!doc.querySelector("base[href]")) {
+    const base = doc.createElement("base");
+    base.setAttribute("href", url);
+    doc.head?.prepend(base);
+  }
 
   // Extract metadata BEFORE readability mutates the DOM
   const tags = extractTags(doc);
