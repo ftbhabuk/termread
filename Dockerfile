@@ -9,7 +9,7 @@ ARG BUN_TARGET=""
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --no-frozen-lockfile
 
 COPY *.ts ./
 RUN if [ -n "${BUN_TARGET}" ]; then \
@@ -37,4 +37,5 @@ WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/*.ts ./
 
+USER bun
 ENTRYPOINT ["bun", "run", "cli.ts"]
