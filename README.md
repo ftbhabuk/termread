@@ -34,6 +34,37 @@ bun run cli.ts https://example.com/article
 
 ---
 
+## docker
+
+No local dependencies needed — only Docker required.
+
+**Use the pre-built image:**
+```bash
+# latest stable release
+docker run --rm -it ghcr.io/ftbhabuk/termread:latest https://example.com/article
+
+# current snapshot (built from every main commit)
+docker run --rm -it ghcr.io/ftbhabuk/termread:snapshot https://example.com/article
+```
+
+**Or build locally** (with [just](https://github.com/casey/just)):
+```bash
+just image                                       # build the Docker image
+just run https://example.com/article            # interactive pager
+just raw https://example.com/article            # plain text / pipe-friendly
+just build                                       # compile binary via Docker → ./termread
+```
+
+The `-it` flag allocates a terminal for the interactive pager. Without it, add `--raw` for plain text output.
+
+**Pipe-friendly plain text:**
+```bash
+docker run --rm ghcr.io/ftbhabuk/termread:latest https://example.com/article --raw | grep "keyword"
+docker run --rm ghcr.io/ftbhabuk/termread:latest https://example.com/article --raw > article.txt
+```
+
+---
+
 ## usage
 
 ```bash
